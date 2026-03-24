@@ -1650,6 +1650,31 @@ function createTileManager({
         tile.ptySessionId = event.args[0];
         saveCanvasDebounced();
       }
+      if (event.channel === "pty-cwd") {
+        const cwd = event.args[0];
+        if (cwd) {
+          tile.cwd = cwd;
+          const tDom = tileDOMs.get(tile.id);
+          if (tDom) {
+            const titleText = tDom.titleBar.querySelector(".tile-title-text");
+            if (titleText) {
+              let display = cwd;
+              const homeMatch = cwd.match(/^\/Users\/[^/]+/);
+              if (homeMatch && cwd.startsWith(homeMatch[0])) {
+                display = "~" + cwd.slice(homeMatch[0].length);
+              }
+              let cwdSpan = titleText.querySelector(".tile-title-cwd");
+              if (!cwdSpan) {
+                cwdSpan = document.createElement("span");
+                cwdSpan.className = "tile-title-cwd";
+                titleText.appendChild(cwdSpan);
+              }
+              cwdSpan.textContent = display;
+              cwdSpan.title = cwd;
+            }
+          }
+        }
+      }
     });
   }
   function spawnGraphWebview(tile) {

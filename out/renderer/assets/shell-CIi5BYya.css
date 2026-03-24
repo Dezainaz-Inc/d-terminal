@@ -868,6 +868,16 @@ body {
 	flex-shrink: 0;
 }
 
+.tile-title-cwd {
+	color: var(--muted);
+	margin-left: 6px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	flex-shrink: 1;
+	font-weight: 400;
+	opacity: 0.8;
+}
+
 .tile-btn-group {
 	display: flex;
 	align-items: center;

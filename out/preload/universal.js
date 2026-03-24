@@ -116,6 +116,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     { sessionId, cols, rows }
   ),
   ptyDiscover: () => electron.ipcRenderer.invoke("pty:discover"),
+  ptyGetCwd: (sessionId) => electron.ipcRenderer.invoke("pty:get-cwd", { sessionId }),
   onPtyData: (cb) => {
     dataListeners.add(cb);
   },
@@ -129,6 +130,7 @@ electron.contextBridge.exposeInMainWorld("api", {
     exitListeners.delete(cb);
   },
   notifyPtySessionId: (sessionId) => electron.ipcRenderer.sendToHost("pty-session-id", sessionId),
+  notifyPtyCwd: (cwd) => electron.ipcRenderer.sendToHost("pty-cwd", cwd),
   onCdTo: (cb) => {
     cdToListeners.add(cb);
   },

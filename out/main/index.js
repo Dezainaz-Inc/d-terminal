@@ -4367,6 +4367,18 @@ ipcMain.handle(
   "pty:discover",
   () => discoverSessions()
 );
+ipcMain.handle(
+  "pty:get-cwd",
+  (_event, { sessionId }) => {
+    try {
+      const name = tmuxSessionName(sessionId);
+      const cwd = tmuxExec("display-message", "-p", "-t", name, "#{pane_current_path}");
+      return cwd || null;
+    } catch {
+      return null;
+    }
+  }
+);
 let settingsOpen = false;
 function setSettingsOpen(open) {
   if (!mainWindow || settingsOpen === open) return;

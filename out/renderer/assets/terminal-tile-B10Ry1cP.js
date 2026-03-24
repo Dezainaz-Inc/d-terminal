@@ -68,6 +68,22 @@ function App() {
     window.api.onPtyExit(handleExit);
     return () => window.api.offPtyExit(handleExit);
   }, [sessionId]);
+  reactExports.useEffect(() => {
+    if (!sessionId) return;
+    let lastCwd = "";
+    const pollCwd = async () => {
+      try {
+        const cwd = await window.api.ptyGetCwd(sessionId);
+        if (cwd && cwd !== lastCwd) {
+          lastCwd = cwd;
+          window.api.notifyPtyCwd(cwd);
+        }
+      } catch {}
+    };
+    pollCwd();
+    const interval = setInterval(pollCwd, 2000);
+    return () => clearInterval(interval);
+  }, [sessionId]);
   if (exited) {
     return /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "terminal-tile-exited", children: "Session ended" });
   }
