@@ -22,7 +22,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Rebuild native modules
-        run: npx electron-rebuild
+        run: npx @electron/rebuild
 
       - name: Build & Publish
         env:
