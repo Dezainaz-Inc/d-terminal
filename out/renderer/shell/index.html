@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<title>D-Terminal</title>
+  <script type="module" crossorigin src="../assets/shell-CvS2RNy4.js"></script>
+  <link rel="stylesheet" crossorigin href="../assets/shell-CIi5BYya.css">
+</head>
+
+<body>
+	<div id="titlebar">
+		<div id="top-tabs">
+			<button class="top-tab active" data-tab="nippo" onclick="switchTopTab('nippo')">日報</button>
+			<button class="top-tab" data-tab="canvas" onclick="switchTopTab('canvas')">キャンバス</button>
+		</div>
+	</div>
+
+	<button type="button" id="nav-toggle" class="panel-toggle" aria-pressed="true" aria-label="Hide Navigator"
+		title="Hide Navigator" style="display:none"></button>
+
+	<div id="view-nippo" class="top-view active">
+		<webview id="nippo-webview" src="../nippo/index.html"
+			style="width:100%;height:100%;border:none;"
+			webpreferences="contextIsolation=yes, sandbox=no"
+			allowpopups></webview>
+	</div>
+
+	<div id="view-canvas" class="top-view">
+	<div id="panels">
+		<div id="panel-nav">
+			<div id="nav-toolbar">
+				<button type="button" id="update-pill" style="display: none !important;" disabled hidden></button>
+				<div id="workspace-dropdown-row">
+					<div id="workspace-dropdown">
+						<button type="button" id="workspace-trigger">
+							<span id="workspace-trigger-label"><span id="workspace-trigger-parent"></span><span
+									id="workspace-trigger-name">No workspace</span></span>
+							<svg class="dropdown-caret" width="12" height="12" viewBox="0 0 24 24" fill="none"
+								stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+								<polyline points="6 9 12 15 18 9" />
+							</svg>
+						</button>
+						<div id="workspace-menu" class="hidden">
+							<div id="workspace-menu-items"></div>
+							<button type="button" class="dropdown-item dropdown-item-add" id="ws-add-option">
+								+ Add workspace&#x2026;
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div id="nav-resize" class="resize-handle" data-panel="nav"></div>
+		<div id="panel-viewer">
+			<canvas id="grid-canvas"></canvas>
+			<div id="tile-layer"></div>
+			<div id="edge-indicators"></div>
+			<div id="zoom-indicator">100%</div>
+		</div>
+	</div><!-- /panels -->
+	</div><!-- /view-canvas -->
+
+	<div id="settings-overlay">
+		<div id="settings-backdrop"></div>
+		<div id="settings-modal"></div>
+	</div>
+
+	<div id="canvas-skill-dialog" class="hidden">
+		<div id="canvas-skill-backdrop"></div>
+		<div id="canvas-skill-modal">
+			<h2>Canvas Skill for AI Agents</h2>
+			<p>D-Terminal can install a canvas skill for your AI coding agents, letting them arrange tiles on your workspace.</p>
+			<div id="canvas-skill-agents"></div>
+			<div id="canvas-skill-actions">
+				<button type="button" id="canvas-skill-skip">Skip</button>
+				<button type="button" id="canvas-skill-install">Install</button>
+			</div>
+		</div>
+	</div>
+
+	<div id="resize-overlay"></div>
+
+	<div id="loading-overlay">
+		<div id="loading-spinner"></div>
+		<div id="loading-status">Initializing&#x2026;</div>
+	</div>
+
+	<script>
+	function switchTopTab(tab) {
+		document.querySelectorAll('.top-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+		document.getElementById('view-nippo').classList.toggle('active', tab === 'nippo');
+		document.getElementById('view-canvas').classList.toggle('active', tab === 'canvas');
+		document.getElementById('nav-toggle').style.display = tab === 'canvas' ? '' : 'none';
+	}
+	// Force remove loading overlay after 2s fallback
+	setTimeout(() => {
+		const lo = document.getElementById('loading-overlay');
+		if (lo) { lo.classList.add('fade-out'); setTimeout(() => lo.remove(), 350); }
+	}, 2000);
+	</script>
+</body>
+
+</html>
