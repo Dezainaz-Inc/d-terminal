@@ -10,29 +10,6 @@
     "packages/*"
   ],
   "main": "out/main/index.js",
-  "build": {
-    "appId": "com.dezainaz.d-terminal",
-    "productName": "D-Terminal",
-    "mac": {
-      "category": "public.app-category.productivity",
-      "target": ["dmg", "zip"],
-      "icon": "build/icon.icns"
-    },
-    "publish": {
-      "provider": "github",
-      "owner": "Dezainaz-Inc",
-      "repo": "d-terminal"
-    },
-    "files": [
-      "out/**/*",
-      "node_modules/**/*",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "node_modules/node-pty/**",
-      "node_modules/@img/**"
-    ]
-  },
   "dependencies": {
     "@blocknote/core": "0.47.0",
     "@blocknote/mantine": "0.47.0",

@@ -3767,6 +3767,9 @@ class UpdateManager {
   onBeforeQuit = null;
   init(opts) {
     if (this.initialized) return;
+    console.log("[updater] Auto-update is disabled.");
+    this.initialized = true;
+    return;
     autoUpdater.logger = {
       info: (msg) => console.log(`[updater] ${msg}`),
       warn: (msg) => console.warn(`[updater] ${msg}`),
@@ -3820,24 +3823,13 @@ class UpdateManager {
     this.initialized = true;
   }
   async checkForUpdates() {
-    if (this.state.status === "checking" || this.state.status === "downloading") return;
-    try {
-      await autoUpdater.checkForUpdates();
-    } catch (err) {
-      this.handleError(err.message);
-    }
+    return;
   }
   async downloadAvailableUpdate() {
-    if (this.state.status !== "available") return;
-    try {
-      await autoUpdater.downloadUpdate();
-    } catch (err) {
-      this.handleError(err.message);
-    }
+    return;
   }
   async install() {
-    if (this.state.status !== "ready") return;
-    autoUpdater.quitAndInstall();
+    return;
   }
   getState() {
     return { ...this.state };
