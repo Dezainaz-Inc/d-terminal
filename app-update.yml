@@ -1,3 +1,4 @@
 provider: github
 owner: Dezainaz-Inc
 repo: d-terminal
+private: true

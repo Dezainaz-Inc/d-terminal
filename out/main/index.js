@@ -3768,6 +3768,17 @@ class UpdateManager {
   init(opts) {
     if (this.initialized) return;
     autoUpdater.autoDownload = false;
+    if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
+      try {
+        const ghToken = execSync("gh auth token", { encoding: "utf-8", timeout: 5000 }).trim();
+        if (ghToken) {
+          process.env.GH_TOKEN = ghToken;
+          console.log("[updater] GH_TOKEN set from gh CLI.");
+        }
+      } catch {
+        console.log("[updater] No GitHub token found. Update check may fail for private repos.");
+      }
+    }
     autoUpdater.logger = {
       info: (msg) => console.log(`[updater] ${msg}`),
       warn: (msg) => console.warn(`[updater] ${msg}`),
