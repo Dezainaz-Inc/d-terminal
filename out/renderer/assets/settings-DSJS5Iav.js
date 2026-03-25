@@ -426,8 +426,99 @@ function AppearancePane() {
     ] })
   ] });
 }
+function UpdatePane() {
+  const [status, setStatus] = reactExports.useState({ status: "idle" });
+  const [checking, setChecking] = reactExports.useState(false);
+  reactExports.useEffect(() => {
+    api.updateGetStatus().then((s) => setStatus(s)).catch(() => {});
+    const off = api.onUpdateStatus((_event, s) => {
+      setStatus(s);
+      setChecking(false);
+    });
+    return off;
+  }, []);
+  async function handleCheck() {
+    setChecking(true);
+    try {
+      const s = await api.updateCheck();
+      setStatus(s);
+    } catch {}
+    setChecking(false);
+  }
+  async function handleDownload() {
+    try {
+      const s = await api.updateDownload();
+      setStatus(s);
+    } catch {}
+  }
+  function handleInstall() {
+    api.updateInstall();
+  }
+  const st = status.status;
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-6 p-6", children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-1", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx("h2", { className: "text-base font-semibold", children: "Update" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm text-muted-foreground", children: "Check for new versions of D-Terminal." })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "space-y-4", children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex items-center justify-between", children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-sm font-medium", children: "Status" }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx("p", { className: "text-xs text-muted-foreground mt-0.5", children:
+            st === "idle" ? "Up to date" :
+            st === "checking" || checking ? "Checking for updates..." :
+            st === "available" ? `Version ${status.version || ""} available` :
+            st === "downloading" ? `Downloading... ${status.progress || 0}%` :
+            st === "ready" ? `Version ${status.version || ""} ready to install` :
+            st === "error" ? `Error: ${status.error || "Unknown"}` :
+            "Unknown"
+          })
+        ] }),
+        st === "idle" && !checking && /* @__PURE__ */ jsxRuntimeExports.jsx("button", {
+          type: "button",
+          onClick: handleCheck,
+          className: "px-3 py-1.5 text-xs font-medium rounded-md border border-border/50 hover:bg-accent cursor-pointer transition-colors",
+          children: "Check for updates"
+        }),
+        (st === "checking" || checking) && /* @__PURE__ */ jsxRuntimeExports.jsx("span", {
+          className: "text-xs text-muted-foreground",
+          children: "Checking..."
+        }),
+        st === "available" && /* @__PURE__ */ jsxRuntimeExports.jsx("button", {
+          type: "button",
+          onClick: handleDownload,
+          className: "px-3 py-1.5 text-xs font-medium rounded-md text-white cursor-pointer transition-colors",
+          style: { background: "#c4713b" },
+          children: "Download"
+        }),
+        st === "downloading" && /* @__PURE__ */ jsxRuntimeExports.jsx("div", {
+          className: "w-24 h-1.5 rounded-full overflow-hidden",
+          style: { backgroundColor: "color-mix(in srgb, var(--foreground) 12%, transparent)" },
+          children: /* @__PURE__ */ jsxRuntimeExports.jsx("div", {
+            className: "h-full rounded-full transition-all",
+            style: { width: `${status.progress || 0}%`, background: "#c4713b" }
+          })
+        }),
+        st === "ready" && /* @__PURE__ */ jsxRuntimeExports.jsx("button", {
+          type: "button",
+          onClick: handleInstall,
+          className: "px-3 py-1.5 text-xs font-medium rounded-md text-white cursor-pointer transition-colors",
+          style: { background: "#c4713b" },
+          children: "Restart & Install"
+        }),
+        st === "error" && /* @__PURE__ */ jsxRuntimeExports.jsx("button", {
+          type: "button",
+          onClick: handleCheck,
+          className: "px-3 py-1.5 text-xs font-medium rounded-md border border-border/50 hover:bg-accent cursor-pointer transition-colors",
+          children: "Retry"
+        })
+      ] })
+    ] })
+  ] });
+}
 const NAV_ITEMS = [
-  { id: "appearance", label: "Appearance", icon: P }
+  { id: "appearance", label: "Appearance", icon: P },
+  { id: "update", label: "Update", icon: G }
 ];
 function CloseButton({ onClick }) {
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex flex-col items-center gap-0.5", children: [
@@ -521,7 +612,7 @@ function App() {
             appVersion
           ] }) })
         ] }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx("div", { className: "flex-1 overflow-auto", children: activePane === "appearance" && /* @__PURE__ */ jsxRuntimeExports.jsx(AppearancePane, {}) })
+        /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { className: "flex-1 overflow-auto", children: [activePane === "appearance" && /* @__PURE__ */ jsxRuntimeExports.jsx(AppearancePane, {}), activePane === "update" && /* @__PURE__ */ jsxRuntimeExports.jsx(UpdatePane, {})] })
       ]
     }
   );

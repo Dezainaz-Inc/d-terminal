@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fafaf8"/>
+      <stop offset="100%" stop-color="#f0efe8"/>
+    </linearGradient>
+  </defs>
+  <rect width="660" height="400" fill="url(#bg)"/>
+  <text x="330" y="50" text-anchor="middle" font-family="'Noto Sans JP', -apple-system, Helvetica, sans-serif" font-size="18" font-weight="600" fill="#1c1c1a" opacity="0.85">D-Terminal</text>
+  <text x="330" y="72" text-anchor="middle" font-family="'Noto Sans JP', -apple-system, Helvetica, sans-serif" font-size="11" fill="#6e6b63">Drag to Applications to install</text>
+  <!-- Arrow -->
+  <line x1="260" y1="210" x2="400" y2="210" stroke="#c4713b" stroke-width="2" stroke-linecap="round" opacity="0.6"/>
+  <polyline points="385,200 400,210 385,220" fill="none" stroke="#c4713b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/>
+  <!-- Bottom subtle line -->
+  <line x1="80" y1="360" x2="580" y2="360" stroke="#e4e2dc" stroke-width="0.5" opacity="0.5"/>
+  <text x="330" y="380" text-anchor="middle" font-family="'Noto Sans JP', -apple-system, Helvetica, sans-serif" font-size="9" fill="#6e6b63" opacity="0.5">Dezainaz Inc.</text>
+</svg>
