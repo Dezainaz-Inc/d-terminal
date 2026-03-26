@@ -4,25 +4,25 @@ Dezainaz Inc. 社内の日報・プロジェクト管理 + ターミナルを統
 
 ## ダウンロード
 
-### 最新版
-
 [![Latest Release](https://img.shields.io/github/v/release/Dezainaz-Inc/d-terminal?label=%E6%9C%80%E6%96%B0%E3%83%90%E3%83%BC%E3%82%B8%E3%83%A7%E3%83%B3&style=flat-square)](https://github.com/Dezainaz-Inc/d-terminal/releases/latest)
 
-| OS | ダウンロード |
-|----|------------|
-| macOS (Apple Silicon / Intel) | [**D-Terminal.dmg**](https://github.com/Dezainaz-Inc/d-terminal/releases/latest/download/D-Terminal.dmg) |
+[Releases ページ](https://github.com/Dezainaz-Inc/d-terminal/releases/latest)から最新版をダウンロードしてください。
 
-> 2回目以降はアプリ内で自動アップデートされるため、再ダウンロードは不要です。
+| ファイル | 対象 |
+|---------|------|
+| `D-Terminal-x.x.x-arm64.dmg` | **Apple Silicon Mac**（M1/M2/M3/M4） |
+
+> **どれをダウンロードすれば？** → `.dmg` ファイルをダウンロードしてください。`.blockmap` や `latest-mac.yml` は自動アップデート用なので無視してOKです。
 
 ## インストール方法
 
-### macOS
-
-1. 上のリンクから `.dmg` をダウンロード
-2. ダウンロードした `.dmg` を開き、`D-Terminal` を `Applications` フォルダにドラッグ
+1. `.dmg` をダウンロードして開く
+2. `D-Terminal` を `Applications` フォルダにドラッグ
 3. 初回起動時にセキュリティの警告が出る場合：
    - **システム設定** → **プライバシーとセキュリティ** → 下部の「このまま開く」をクリック
 4. 以降は通常通り起動できます
+
+> 2回目以降はアプリ内（設定 → Update）で更新確認できます。自動チェックも60分ごとに行われます。
 
 ## 機能
 
@@ -45,6 +45,8 @@ Dezainaz Inc. 社内の日報・プロジェクト管理 + ターミナルを統
 
 ### ターミナル（キャンバス）
 - 複数のターミナルタイルを自由に配置
+- ターミナル下部のインプットバーからコマンド送信（履歴対応）
+- ブラウザタイルでURL/localhostプレビュー
 - キャンバス上でズーム・パン操作
 
 ### AI アシスタント
@@ -57,7 +59,7 @@ Dezainaz Inc. 社内の日報・プロジェクト管理 + ターミナルを統
 
 ## 自動アップデート
 
-アプリは起動後、60分ごとに新しいバージョンを自動チェックします。アップデートがある場合はバックグラウンドでダウンロードされ、次回起動時に適用されます。
+アプリは起動後、60分ごとに新しいバージョンを自動チェックします。設定画面の「Update」からも手動で確認できます。
 
 ## 開発者向け
 
@@ -74,7 +76,7 @@ git tag v0.x.x
 git push origin main --tags
 ```
 
-タグをpushすると GitHub Actions が自動でビルドし、[Releases](https://github.com/Dezainaz-Inc/d-terminal/releases) に `.dmg` が公開されます。
+タグをpushすると GitHub Actions が自動でビルド → Releases に `.dmg` が公開されます。
 
 ### ローカルでの変更（asar直接編集）
 
