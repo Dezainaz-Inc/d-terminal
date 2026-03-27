@@ -35,7 +35,7 @@ jobs:
 
           # Copy dynamic library dependencies from brew
           mkdir -p resources/lib
-          otool -L "$TMUX_BIN" | awk '{print $1}' | grep '/opt/homebrew\|/usr/local' | while read -r lib; do
+          otool -L "$TMUX_BIN" | tail -n +2 | awk '{print $1}' | grep '/opt/homebrew\|/usr/local' | while read -r lib; do
             echo "Copying lib: $lib"
             cp "$lib" resources/lib/
             libname="$(basename "$lib")"
