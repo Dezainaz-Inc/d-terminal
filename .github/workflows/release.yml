@@ -28,18 +28,18 @@ jobs:
         run: |
           brew install tmux
 
-          TMUX_PREFIX=$(brew --prefix tmux)
-          TMUX_BIN="${TMUX_PREFIX}/bin/tmux"
-          cp "${TMUX_BIN}" resources/tmux
+          TMUX_BIN="$(which tmux)"
+          echo "tmux binary: $TMUX_BIN"
+          cp "$TMUX_BIN" resources/tmux
           chmod +x resources/tmux
 
           # Copy dynamic library dependencies from brew
           mkdir -p resources/lib
-          BREW_PREFIX=$(brew --prefix)
-          otool -L "${TMUX_BIN}" | awk '{print $1}' | grep "${BREW_PREFIX}" | while read -r lib; do
-            cp "${lib}" resources/lib/
-            libname=$(basename "${lib}")
-            install_name_tool -change "${lib}" "@loader_path/lib/${libname}" resources/tmux
+          otool -L "$TMUX_BIN" | awk '{print $1}' | grep '/opt/homebrew\|/usr/local' | while read -r lib; do
+            echo "Copying lib: $lib"
+            cp "$lib" resources/lib/
+            libname="$(basename "$lib")"
+            install_name_tool -change "$lib" "@loader_path/lib/$libname" resources/tmux
           done
 
           # Generate terminfo
