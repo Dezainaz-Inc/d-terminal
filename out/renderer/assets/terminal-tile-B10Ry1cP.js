@@ -28,11 +28,12 @@ function InputBar({ sessionId }) {
     setValue("");
     setHistoryIndex(-1);
     if (textareaRef.current) {
+      textareaRef.current.value = "";
       textareaRef.current.style.height = "auto";
     }
   }, [sessionId, value]);
   const onKeyDown = reactExports.useCallback((e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       send();
       return;

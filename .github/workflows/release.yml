@@ -24,6 +24,17 @@ jobs:
       - name: Rebuild native modules
         run: npx @electron/rebuild
 
+      - name: Prepare tmux for bundle
+        run: |
+          brew install tmux
+          mkdir -p resources/terminfo/78
+          cp "$(brew --prefix tmux)/bin/tmux" resources/tmux
+          chmod +x resources/tmux
+          cp resources/tmux.conf resources/tmux.conf || true
+          # Generate xterm-256color terminfo
+          infocmp -x xterm-256color > /tmp/xterm-256color.ti
+          tic -o resources/terminfo /tmp/xterm-256color.ti
+
       - name: Build & Publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
