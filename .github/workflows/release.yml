@@ -27,13 +27,36 @@ jobs:
       - name: Prepare tmux for bundle
         run: |
           brew install tmux
-          mkdir -p resources/terminfo/78
-          cp "$(brew --prefix tmux)/bin/tmux" resources/tmux
+          TMUX_BIN="$(brew --prefix tmux)/bin/tmux"
+          cp "$TMUX_BIN" resources/tmux
           chmod +x resources/tmux
-          cp resources/tmux.conf resources/tmux.conf || true
-          # Generate xterm-256color terminfo
+
+          # Copy dynamic library dependencies
+          mkdir -p resources/lib
+          BREW_PREFIX="$(brew --prefix)"
+          for lib in $(otool -L "$TMUX_BIN" | grep "$BREW_PREFIX" | awk '{print $1}'); do
+            cp "$lib" resources/lib/
+          done
+
+          # Rewrite tmux to use @loader_path/lib/
+          for lib in resources/lib/*.dylib; do
+            libname="$(basename "$lib")"
+            original="$(otool -L resources/tmux | grep "$libname" | awk '{print $1}')"
+            if [ -n "$original" ]; then
+              install_name_tool -change "$original" "@loader_path/lib/$libname" resources/tmux
+            fi
+          done
+
+          # Generate terminfo
+          mkdir -p resources/terminfo/78
           infocmp -x xterm-256color > /tmp/xterm-256color.ti
           tic -o resources/terminfo /tmp/xterm-256color.ti
+
+          # Verify
+          echo "=== tmux dependencies ==="
+          otool -L resources/tmux
+          echo "=== lib contents ==="
+          ls -la resources/lib/
 
       - name: Build & Publish
         env:
