@@ -27,24 +27,19 @@ jobs:
       - name: Prepare tmux for bundle
         run: |
           brew install tmux
-          TMUX_BIN="$(brew --prefix tmux)/bin/tmux"
-          cp "$TMUX_BIN" resources/tmux
+
+          TMUX_PREFIX=$(brew --prefix tmux)
+          TMUX_BIN="${TMUX_PREFIX}/bin/tmux"
+          cp "${TMUX_BIN}" resources/tmux
           chmod +x resources/tmux
 
-          # Copy dynamic library dependencies
+          # Copy dynamic library dependencies from brew
           mkdir -p resources/lib
-          BREW_PREFIX="$(brew --prefix)"
-          for lib in $(otool -L "$TMUX_BIN" | grep "$BREW_PREFIX" | awk '{print $1}'); do
-            cp "$lib" resources/lib/
-          done
-
-          # Rewrite tmux to use @loader_path/lib/
-          for lib in resources/lib/*.dylib; do
-            libname="$(basename "$lib")"
-            original="$(otool -L resources/tmux | grep "$libname" | awk '{print $1}')"
-            if [ -n "$original" ]; then
-              install_name_tool -change "$original" "@loader_path/lib/$libname" resources/tmux
-            fi
+          BREW_PREFIX=$(brew --prefix)
+          otool -L "${TMUX_BIN}" | awk '{print $1}' | grep "${BREW_PREFIX}" | while read -r lib; do
+            cp "${lib}" resources/lib/
+            libname=$(basename "${lib}")
+            install_name_tool -change "${lib}" "@loader_path/lib/${libname}" resources/tmux
           done
 
           # Generate terminfo
