@@ -92,16 +92,30 @@
 
 	<script>
 	const NIPPO_VIEWS = ['report', 'project', 'pages'];
+	let currentTopTab = 'report';
 	function switchTopTab(tab) {
+		if (tab === currentTopTab) return;
+		currentTopTab = tab;
 		document.querySelectorAll('.top-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
 		const isNippo = NIPPO_VIEWS.includes(tab);
-		document.getElementById('view-nippo').classList.toggle('active', isNippo);
-		document.getElementById('view-canvas').classList.toggle('active', tab === 'canvas');
+		const nippoView = document.getElementById('view-nippo');
+		const canvasView = document.getElementById('view-canvas');
+		// 全ビューを非表示にしてからターゲットを表示
+		nippoView.classList.remove('active');
+		canvasView.classList.remove('active');
+		if (isNippo) {
+			nippoView.classList.add('active');
+		} else if (tab === 'canvas') {
+			canvasView.classList.add('active');
+		}
 		document.getElementById('nav-toggle').style.display = tab === 'canvas' ? '' : 'none';
 		if (isNippo) {
 			const wv = document.getElementById('nippo-webview');
 			if (wv) {
-				try { wv.executeJavaScript(`switchView('${tab}')`); } catch(e) {}
+				// webviewの準備を待ってからswitchView
+				const exec = () => { try { wv.executeJavaScript(`if(typeof switchView==='function')switchView('${tab}')`); } catch(e) {} };
+				if (wv.getWebContentsId && wv.getWebContentsId()) { exec(); }
+				else { wv.addEventListener('dom-ready', exec, { once: true }); }
 			}
 		}
 	}

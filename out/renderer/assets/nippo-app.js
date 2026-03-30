@@ -2191,8 +2191,21 @@ function setupRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'project_tasks' }, () => {
       if (currentView === 'project' && activeProjectId) loadProjectTasks(activeProjectId);
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'project_milestones' }, () => {
+      if (currentView === 'project' && activeProjectId) loadMilestones();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'project_members' }, () => {
+      if (currentView === 'project' && activeProjectId) loadProjectMembers();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'pages' }, () => {
+      if (currentView === 'pages') loadPages();
+      if (currentView === 'project' && activeProjectId) loadProjectPages();
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'team_members' }, () => {
       loadTeamMembers();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'notification_settings' }, () => {
+      loadNotifSettings();
     })
     .subscribe();
 }
