@@ -2181,6 +2181,7 @@ async function init() {
   const settingsBackdrop = document.getElementById("settings-backdrop");
   const settingsModal = document.getElementById("settings-modal");
   const updatePill = document.getElementById("update-pill");
+  const titlebarUpdatePill = document.getElementById("titlebar-update-pill");
   const dragDropOverlay = document.getElementById("drag-drop-overlay");
   const loadingOverlay = document.getElementById("loading-overlay");
   const loadingStatusEl = document.getElementById("loading-status");
@@ -2822,21 +2823,55 @@ async function init() {
   });
   let updateState = { status: "idle" };
   function renderUpdatePill() {
-    updatePill.style.display = "none";
-    return;
+    const st = updateState.status;
+    const pill = titlebarUpdatePill;
+    if (updatePill) updatePill.style.display = "none";
+    if (!pill) return;
+    pill.classList.remove("is-downloading", "is-ready", "is-error");
+    if (st === "available" || st === "downloading" || st === "ready" || st === "error") {
+      pill.style.display = "";
+      pill.disabled = (st === "downloading");
+      if (st === "available") {
+        pill.textContent = "v" + (updateState.version || "") + " 公開中";
+        pill.title = "クリックしてGitHub Releasesを開く";
+      } else if (st === "downloading") {
+        pill.classList.add("is-downloading");
+        pill.textContent = "ダウンロード中 " + (updateState.progress || 0) + "%";
+        pill.title = "ダウンロード中...";
+      } else if (st === "ready") {
+        pill.classList.add("is-ready");
+        pill.textContent = "再起動してアップデート";
+        pill.title = "クリックして再起動・インストール";
+      } else if (st === "error") {
+        pill.classList.add("is-error");
+        pill.textContent = "アップデートエラー";
+        pill.title = updateState.error || "失敗しました。クリックでリトライ";
+      }
+    } else {
+      pill.style.display = "none";
+    }
   }
-  updatePill.addEventListener("click", () => {
+  window.shellApi.onUpdateStatus((s) => {
+    updateState = s;
+    renderUpdatePill();
+  });
+  window.shellApi.updateGetStatus().then((s) => {
+    updateState = s;
+    renderUpdatePill();
+  }).catch(() => {});
+  function handleUpdatePillClick() {
     if (updateState.status === "downloading" || updateState.status === "installing") return;
     if (updateState.status === "available") {
-      window.shellApi.updateDownload();
+      window.open("https://github.com/Dezainaz-Inc/d-terminal/releases/latest", "_blank");
     } else if (updateState.status === "ready") {
       window.shellApi.updateInstall();
     } else if (updateState.status === "error") {
       updateState = { status: "idle" };
       renderUpdatePill();
-      window.shellApi.updateCheck();
-    } else ;
-  });
+    }
+  }
+  updatePill.addEventListener("click", handleUpdatePillClick);
+  if (titlebarUpdatePill) titlebarUpdatePill.addEventListener("click", handleUpdatePillClick);
   window.shellApi.onLoadingStatus((message) => {
     loadingStatusEl.textContent = message;
   });

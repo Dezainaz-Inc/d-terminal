@@ -3697,8 +3697,10 @@ function killAllAndWait() {
       })
     );
     for (const d of session2.disposables) d.dispose();
+    // tmuxセッションは殺さずdetachのみ（次回再接続できるように）
     session2.pty.kill();
     sessions.delete(id);
+    // メタデータは残す（再接続用）
   }
   const timeout = new Promise(
     (resolve2) => setTimeout(resolve2, KILL_ALL_TIMEOUT_MS)
@@ -3757,7 +3759,7 @@ function verifyTmuxAvailable() {
 }
 const { autoUpdater } = electronUpdater;
 const ERROR_RESET_DELAY_MS = 3e4;
-const CHECK_INTERVAL_MS = 60 * 60 * 1e3;
+const CHECK_INTERVAL_MS = 10 * 60 * 1e3;
 const INITIAL_CHECK_DELAY_MS = 5e3;
 class UpdateManager {
   state = { status: "idle" };
@@ -3769,13 +3771,25 @@ class UpdateManager {
     if (this.initialized) return;
     autoUpdater.autoDownload = false;
     if (!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN) {
-      try {
-        const ghToken = execSync("gh auth token", { encoding: "utf-8", timeout: 5000 }).trim();
-        if (ghToken) {
-          process.env.GH_TOKEN = ghToken;
-          console.log("[updater] GH_TOKEN set from gh CLI.");
-        }
-      } catch {
+      const ghPaths = [
+        "/opt/homebrew/bin/gh",
+        "/usr/local/bin/gh",
+        join(homedir(), ".local", "bin", "gh"),
+        "gh"
+      ];
+      let tokenFound = false;
+      for (const ghBin of ghPaths) {
+        try {
+          const ghToken = execSync(`"${ghBin}" auth token`, { encoding: "utf-8", timeout: 5000, shell: true }).trim();
+          if (ghToken) {
+            process.env.GH_TOKEN = ghToken;
+            console.log("[updater] GH_TOKEN set from gh CLI (" + ghBin + ").");
+            tokenFound = true;
+            break;
+          }
+        } catch {}
+      }
+      if (!tokenFound) {
         console.log("[updater] No GitHub token found. Update check may fail for private repos.");
       }
     }
@@ -3826,6 +3840,7 @@ class UpdateManager {
         CHECK_INTERVAL_MS
       );
       powerMonitor.on("resume", () => this.checkForUpdates());
+      // DMGのみ公開のためZIPダウンロードは無効化（GitHub Releasesから手動更新）
     } else {
       autoUpdater.forceDevUpdateConfig = true;
     }
@@ -3860,8 +3875,8 @@ class UpdateManager {
     this.clearErrorTimeout();
   }
   handleError(message) {
-    this.setState({ status: "error", error: message });
-    this.scheduleErrorReset();
+    console.warn("[updater] Error (suppressed from UI):", message);
+    this.setState({ status: "idle", error: void 0 });
   }
   clearErrorTimeout() {
     if (this.errorResetTimeout) {
@@ -4374,12 +4389,20 @@ ipcMain.handle(
     sessionId,
     cols,
     rows
-  }) => reconnectSession(
-    sessionId,
-    cols,
-    rows,
-    event.sender.id
-  )
+  }) => {
+    try {
+      return reconnectSession(
+        sessionId,
+        cols,
+        rows,
+        event.sender.id
+      );
+    } catch (err) {
+      console.warn(`[pty] reconnect failed for ${sessionId}: ${err.message}`);
+      deleteSessionMeta(sessionId);
+      return null;
+    }
+  }
 );
 ipcMain.handle(
   "pty:discover",

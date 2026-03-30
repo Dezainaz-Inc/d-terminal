@@ -3,6 +3,31 @@ const SUPABASE_URL = 'https://vybvmrsepsnqwnxpqxqi.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ5YnZtcnNlcHNucXdueHBxeHFpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjQzOTAxODMsImV4cCI6MjA3OTk2NjE4M30.hg4uT4-14bZ50xsSVe-Zq_Oc9KHqtKow-xZZNtvnS50';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Convert plain text / markdown to HTML for WYSIWYG migration
+function plainToHtml(src) {
+  if (!src) return '';
+  if (src.trim().startsWith('<') && /<\/(p|div|h[1-3]|ul|ol|blockquote)>/.test(src)) return src;
+  let html = src
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre><code>${c}</code></pre>`)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/~~(.+?)~~/g, '<del>$1</del>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+    .replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/\n/g, '<br>');
+  html = html.replace(/((?:<li>.*?<\/li>\s*)+)/g, '<ul>$1</ul>');
+  return '<p>' + html + '</p>';
+}
+
+let pageSaveTimer = null;
+
 // State
 let reports = [];
 let activeId = null;
@@ -23,6 +48,18 @@ let notifTriggers = [];
 let settingsTab = 'members';
 let pages = [];
 let activePageId = null;
+
+let sidebarQuery = '';
+
+// ========== Toast ==========
+let toastTimer = null;
+function showToast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
+}
 
 // ========== Utils ==========
 function formatDate(ds) {
@@ -338,6 +375,7 @@ async function removeMember(id) {
 function toggleTitleDropdown() {
   const btn = document.getElementById('titleDropdownBtn');
   const menu = document.getElementById('titleDropdownMenu');
+  if (!btn || !menu) return;
   const isOpen = menu.classList.contains('open');
   menu.classList.toggle('open');
   btn.classList.toggle('open');
@@ -349,22 +387,33 @@ function toggleTitleDropdown() {
 }
 function closeTitleDropdownOutside(e) {
   const dropdown = document.querySelector('.title-dropdown');
-  if (!dropdown.contains(e.target)) {
-    document.getElementById('titleDropdownMenu').classList.remove('open');
-    document.getElementById('titleDropdownBtn').classList.remove('open');
+  if (!dropdown || !dropdown.contains(e.target)) {
+    const menu = document.getElementById('titleDropdownMenu');
+    const btn = document.getElementById('titleDropdownBtn');
+    if (menu) menu.classList.remove('open');
+    if (btn) btn.classList.remove('open');
   }
 }
 
 // ========== View Switcher ==========
 function switchView(view) {
   currentView = view;
+  sidebarQuery = '';
+  const searchInput = document.getElementById('sidebarSearch');
+  if (searchInput) searchInput.value = '';
   const labels = { report: '日報', project: 'プロジェクト', pages: 'メモ', settings: '設定' };
-  document.getElementById('titleLabel').textContent = labels[view] || view;
-  document.getElementById('titleDropdownMenu').classList.remove('open');
-  document.getElementById('titleDropdownBtn').classList.remove('open');
-  document.getElementById('optReport').classList.toggle('active', view === 'report');
-  document.getElementById('optProject').classList.toggle('active', view === 'project');
-  document.getElementById('optPages').classList.toggle('active', view === 'pages');
+  const titleEl = document.getElementById('titleLabel');
+  if (titleEl) titleEl.textContent = labels[view] || view;
+  const ddMenu = document.getElementById('titleDropdownMenu');
+  const ddBtn = document.getElementById('titleDropdownBtn');
+  if (ddMenu) ddMenu.classList.remove('open');
+  if (ddBtn) ddBtn.classList.remove('open');
+  const optR = document.getElementById('optReport');
+  const optP = document.getElementById('optProject');
+  const optPg = document.getElementById('optPages');
+  if (optR) optR.classList.toggle('active', view === 'report');
+  if (optP) optP.classList.toggle('active', view === 'project');
+  if (optPg) optPg.classList.toggle('active', view === 'pages');
   document.getElementById('reportControls').style.display = view === 'report' ? '' : 'none';
   document.getElementById('projectControls').style.display = view === 'project' ? '' : 'none';
   document.getElementById('pagesControls').style.display = view === 'pages' ? '' : 'none';
@@ -429,12 +478,71 @@ async function loadReports() {
     .order('date', { ascending: false });
   if (error) { console.error('Load error:', error); return; }
   reports = data.map(mapRow);
+  // 今日の日報を自動作成
+  const today = todayStr();
+  let todayReport = reports.find(r => r.date === today);
+  if (!todayReport) {
+    const { data: nr, error: ce } = await supabase
+      .from('daily_reports').insert({ date: today, username: currentUser }).select().single();
+    if (!ce && nr) {
+      todayReport = mapRow(nr);
+      reports.unshift(todayReport);
+    }
+  }
   renderReportList();
   if (!reports.find(r => r.id === activeId)) {
     activeId = null;
-    if (reports.length > 0) selectReport(reports[0].id);
+    if (todayReport) selectReport(todayReport.id);
+    else if (reports.length > 0) selectReport(reports[0].id);
     else { document.getElementById('editor').style.display = 'none'; document.getElementById('emptyState').style.display = 'flex'; }
   }
+  // 今日の日報のtodoが空なら自動セット
+  if (todayReport && todayReport.todos.length === 0) {
+    const prevId = activeId;
+    activeId = todayReport.id;
+    await autoPopulateTodos();
+    activeId = prevId || todayReport.id;
+    if (activeId === todayReport.id) renderEditor();
+  }
+}
+
+async function autoPopulateTodos() {
+  const r = getActive(); if (!r) return;
+  const newTodos = [];
+  const seen = new Set();
+
+  // 1. 昨日の未完了タスクを引き継ぎ
+  const yesterday = reports.find(rep => rep.date < r.date);
+  if (yesterday) {
+    yesterday.todos.filter(t => !t.done).forEach(t => {
+      if (!seen.has(t.text)) { newTodos.push({ text: t.text, done: false }); seen.add(t.text); }
+    });
+  }
+
+  // 2. プロジェクトから自動取得（アサイン・進行中・今日期限）
+  const { data: memberships } = await supabase.from('project_members').select('project_id').eq('username', currentUser);
+  const myIds = memberships ? memberships.map(m => m.project_id) : [];
+  if (myIds.length) {
+    const { data: projs } = await supabase.from('projects').select('id,name').in('id', myIds).eq('status','active');
+    if (projs && projs.length) {
+      const projMap = {}; projs.forEach(p => projMap[p.id] = p.name);
+      const { data: tasks } = await supabase.from('project_tasks')
+        .select('title,project_id,assignee,due_date,status')
+        .in('project_id', projs.map(p=>p.id)).neq('status','done');
+      if (tasks) {
+        const todayDate = r.date;
+        tasks.filter(t => t.assignee === currentUser || t.status === 'in_progress' || t.due_date === todayDate)
+          .forEach(t => {
+            const text = `[${projMap[t.project_id]}] ${t.title}`;
+            if (!seen.has(text)) { newTodos.push({ text, done: false }); seen.add(text); }
+          });
+      }
+    }
+  }
+
+  if (newTodos.length) { r.todos = newTodos; saveToDb(); }
+  // 稼働開始を自動セット
+  if (!r.startTime) { r.startTime = nowTime(); saveToDb(); }
 }
 
 async function createNewReport() {
@@ -453,6 +561,7 @@ async function createNewReport() {
   reports.sort((a,b) => b.date.localeCompare(a.date));
   renderReportList(); selectReport(data.id);
   dp.value = ''; closeSidebarMobile();
+  showToast(`${formatDate(targetDate)}の日報を作成しました`);
   sendNotification('report_created', `📝 ${currentUser}が${formatDate(targetDate)}の日報を作成しました`);
 }
 
@@ -469,13 +578,16 @@ async function deleteReport(id) {
 function getActive() { return reports.find(r => r.id === activeId); }
 
 function renderReportList() {
-  document.getElementById('sidebarList').innerHTML = reports.map(r => {
+  const today = todayStr();
+  const filtered = sidebarQuery ? reports.filter(r => formatDate(r.date).includes(sidebarQuery) || getWeekday(r.date).includes(sidebarQuery)) : reports;
+  document.getElementById('sidebarList').innerHTML = filtered.map(r => {
     const isActive = r.id === activeId;
+    const isToday = r.date === today;
     const hasTime = r.startTime && !r.endTime;
     const status = hasTime ? '稼働中' : (r.endTime ? '完了' : '未開始');
     const sc = hasTime ? ' working' : '';
-    return `<div class="report-item${isActive?' active':''}" onclick="selectReport('${r.id}')">
-      <div class="report-item-date">${formatDate(r.date)}</div>
+    return `<div class="report-item${isActive?' active':''}${isToday?' today':''}" onclick="selectReport('${r.id}')">
+      <div class="report-item-date">${formatDate(r.date)}${isToday?' <span style="font-size:10px;color:var(--accent-warm);font-weight:600">TODAY</span>':''}</div>
       <div class="report-item-sub">${getWeekday(r.date)}</div>
       <span class="report-item-status${sc}">${status}</span>
     </div>`;
@@ -502,7 +614,8 @@ function renderEditor() {
       <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
       <span class="section-title">今日やること</span></div>
       <ul class="task-list" id="todoList"></ul>
-      <button class="btn-add-task" onclick="addTask('todos')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>タスクを追加</button></div>
+      <button class="btn-add-task" onclick="addTask('todos')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>タスクを追加</button>
+      <button class="btn-add-task" onclick="importProjectTasks()" style="margin-left:4px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>プロジェクトから追加</button></div>
     <div class="section"><div class="section-header">
       <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
       <span class="section-title">今日やったこと</span>
@@ -562,6 +675,42 @@ function taskKeydown(e,key,idx) {
     if (inputs.length && idx>0) inputs[idx-1].focus();
   }
 }
+async function importProjectTasks() {
+  const r = getActive(); if (!r) return;
+  const { data: memberships } = await supabase.from('project_members').select('project_id').eq('username', currentUser);
+  const myIds = memberships ? memberships.map(m => m.project_id) : [];
+  if (!myIds.length) { alert('参加中のプロジェクトがありません'); return; }
+  const { data: projs } = await supabase.from('projects').select('id,name').in('id', myIds).eq('status','active');
+  if (!projs || !projs.length) { alert('進行中のプロジェクトがありません'); return; }
+  const { data: tasks } = await supabase.from('project_tasks').select('title,status,project_id').in('project_id', projs.map(p=>p.id)).neq('status','done');
+  if (!tasks || !tasks.length) { alert('未完了のタスクがありません'); return; }
+  const projMap = {}; projs.forEach(p => projMap[p.id] = p.name);
+  const existingTexts = r.todos.map(t => t.text);
+  const items = tasks.map(t => ({ text: `[${projMap[t.project_id]}] ${t.title}`, proj: projMap[t.project_id] })).filter(t => !existingTexts.includes(t.text));
+  if (!items.length) { alert('追加できるタスクがありません（すべて追加済み）'); return; }
+  // Show picker dialog
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'background:var(--bg-primary);border-radius:12px;padding:24px;max-width:420px;width:90%;max-height:70vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.2);font-family:var(--font)';
+  dialog.innerHTML = `<div style="font-size:15px;font-weight:600;margin-bottom:16px;color:var(--text-primary)">プロジェクトタスクを追加</div>
+    <div style="margin-bottom:12px;font-size:12px;color:var(--text-tertiary)">追加するタスクを選択してください</div>
+    <div id="importTaskList">${items.map((t,i) => `<label style="display:flex;align-items:center;gap:8px;padding:8px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--text-primary);transition:background 0.1s" onmouseover="this.style.background='var(--bg-secondary)'" onmouseout="this.style.background='none'"><input type="checkbox" value="${i}" checked style="accent-color:var(--accent-warm)">${t.text}</label>`).join('')}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button id="importCancel" style="font-family:var(--font);padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text-secondary);cursor:pointer;font-size:13px">キャンセル</button>
+      <button id="importConfirm" style="font-family:var(--font);padding:6px 16px;border:none;border-radius:6px;background:var(--accent-warm);color:#fff;cursor:pointer;font-size:13px;font-weight:600">追加</button>
+    </div>`;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) { overlay.remove(); } });
+  dialog.querySelector('#importCancel').onclick = () => overlay.remove();
+  dialog.querySelector('#importConfirm').onclick = () => {
+    const checked = dialog.querySelectorAll('#importTaskList input:checked');
+    checked.forEach(cb => { r.todos.push({ text: items[cb.value].text, done: false }); });
+    saveToDb(); renderTasks('todos','todoList'); overlay.remove();
+  };
+}
+
 function updateTime(field,val) {
   const r = getActive(); if (!r) return; r[field]=val; saveToDb(); renderReportList();
   if (field === 'endTime' && val) sendNotification('report_submitted', `✅ ${currentUser}が${formatDate(r.date)}の日報を提出しました（稼働終了: ${val}）`);
@@ -578,6 +727,7 @@ function submitReport() {
   saveToDb();
   renderReportList();
   renderEditor();
+  showToast('日報を提出しました');
   sendNotification('report_submitted', `✅ ${currentUser}が${formatDate(r.date)}の日報を提出しました（${r.startTime}〜${endTime}）`);
 }
 
@@ -646,6 +796,7 @@ async function createNewProject() {
   await supabase.from('project_members').insert({ project_id: data.id, username: currentUser, role: 'owner' });
   data._taskCount=0; data._doneCount=0; data._isMember=true; data._membersLoaded=true;
   projects.unshift(data); renderProjectList(); selectProject(data.id); closeSidebarMobile();
+  showToast('プロジェクトを作成しました');
   setTimeout(()=>{ const ni=document.querySelector('.project-name-input'); if(ni){ni.select();ni.focus();} },100);
 }
 
@@ -663,11 +814,20 @@ function getActiveProject() { return projects.find(p=>p.id===activeProjectId); }
 
 function renderProjectList() {
   const sl = { active:'進行中', on_hold:'保留', completed:'完了', cancelled:'中止' };
-  document.getElementById('sidebarList').innerHTML = projects.map(p => {
+  const filtered = sidebarQuery ? projects.filter(p => p.name.toLowerCase().includes(sidebarQuery.toLowerCase()) || sl[p.status]?.includes(sidebarQuery)) : projects;
+  document.getElementById('sidebarList').innerHTML = filtered.map(p => {
     const isActive = p.id===activeProjectId;
     const pct = p._taskCount>0?Math.round((p._doneCount/p._taskCount)*100):0;
+    let dueBadge = '';
+    if (p.due_date && p.status === 'active') {
+      const diff = Math.ceil((new Date(p.due_date + 'T00:00:00') - new Date(todayStr() + 'T00:00:00')) / 86400000);
+      if (diff < 0) dueBadge = '<span style="font-size:10px;color:#e53e3e;font-weight:600;margin-left:6px">期限超過</span>';
+      else if (diff === 0) dueBadge = '<span style="font-size:10px;color:#e53e3e;font-weight:600;margin-left:6px">今日期限</span>';
+      else if (diff <= 7) dueBadge = `<span style="font-size:10px;color:var(--accent-warm);font-weight:500;margin-left:6px">残${diff}日</span>`;
+      else dueBadge = `<span style="font-size:10px;color:var(--text-tertiary);margin-left:6px">〆${p.due_date.slice(5).replace('-','/')}</span>`;
+    }
     return `<div class="project-item${isActive?' active':''}" onclick="selectProject('${p.id}')">
-      <div class="project-item-name">${p.name}</div>
+      <div class="project-item-name">${p.name}${dueBadge}</div>
       <div class="project-item-meta">
         <span class="status-badge ${p.status}">${sl[p.status]}</span>
         <div class="progress-bar-mini"><div class="progress-bar-mini-fill" style="width:${pct}%"></div></div>
@@ -726,7 +886,7 @@ function renderProjectEditor() {
           <option value="high" ${p.priority==='high'?'selected':''}>高</option></select></div>
       <div class="meta-field"><div class="meta-field-label">開始日</div>
         <input type="date" value="${p.start_date||''}" onchange="updateProjectField('start_date',this.value)"></div>
-      <div class="meta-field"><div class="meta-field-label">期限</div>
+      <div class="meta-field"><div class="meta-field-label">期限${p.due_date ? (() => { const diff = Math.ceil((new Date(p.due_date+'T00:00:00') - new Date(todayStr()+'T00:00:00')) / 86400000); return diff < 0 ? ' <span style="color:#e53e3e;font-weight:600">（期限超過）</span>' : diff === 0 ? ' <span style="color:#e53e3e;font-weight:600">（今日）</span>' : diff <= 7 ? ` <span style="color:var(--accent-warm);font-weight:500">（残${diff}日）</span>` : ''; })() : ''}</div>
         <input type="date" value="${p.due_date||''}" onchange="updateProjectField('due_date',this.value)"></div>
     </div>
     <div class="progress-section"><div class="progress-header">
@@ -782,6 +942,19 @@ function renderProjectEditor() {
         <button onclick="inviteProjectMember('${p.id}')" style="padding:8px 16px;font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;white-space:nowrap;transition:opacity 150ms ease" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">招待</button>
       </div>
     </div>
+    <div class="section" style="margin-top:24px"><div class="section-header">
+      <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/><circle cx="7" cy="6" r="1.5" fill="currentColor"/><circle cx="13" cy="12" r="1.5" fill="currentColor"/><circle cx="17" cy="18" r="1.5" fill="currentColor"/></svg>
+      <span class="section-title">マイルストーン</span></div>
+      <div id="milestoneList"></div>
+      <button class="btn-add-task" onclick="addMilestone()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>マイルストーンを追加</button></div>
+    <div class="section" style="margin-top:24px"><div class="section-header">
+      <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <span class="section-title">メモ</span></div>
+      <div id="projectPageList"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn-add-task" onclick="linkExistingPage()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>既存メモを紐づける</button>
+        <button class="btn-add-task" onclick="addProjectPage()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>新規メモを作成</button>
+      </div></div>
     <div class="report-footer">
       <button class="btn-delete-report" onclick="deleteProject('${p.id}')">このプロジェクトを削除</button>
       <span class="report-meta">作成: ${new Date(p.created_at).toLocaleString('ja-JP')}</span></div>`;
@@ -790,6 +963,8 @@ function renderProjectEditor() {
   if (descTA) autoResize(descTA);
   renderProjectTaskList();
   loadProjectMembers();
+  loadMilestones();
+  loadProjectPages();
 }
 
 async function loadProjectMembers() {
@@ -827,6 +1002,322 @@ async function getProjectRole(projectId) {
   const { data } = await supabase.from('project_members')
     .select('role').eq('project_id', projectId).eq('username', currentUser).single();
   return data ? data.role : null;
+}
+
+// ========== Milestones ==========
+let projectMilestones = [];
+let editingMilestoneId = null;
+
+async function loadMilestones() {
+  const p = getActiveProject(); if (!p) return;
+  const { data } = await supabase.from('project_milestones').select('*')
+    .eq('project_id', p.id).order('start_date', { ascending: true, nullsFirst: false }).order('due_date', { ascending: true, nullsFirst: false }).order('sort_order');
+  projectMilestones = data || [];
+  renderMilestoneList();
+}
+
+function renderMilestoneList() {
+  const el = document.getElementById('milestoneList'); if (!el) return;
+  if (!projectMilestones.length) {
+    el.innerHTML = '<div class="ms-empty">マイルストーンを追加してタイムラインを作成</div>';
+    return;
+  }
+  const today = todayStr();
+  const todayMs = new Date(today+'T00:00:00').getTime();
+  const DAY = 86400000;
+
+  // タイムライン範囲を計算
+  const dated = projectMilestones.filter(m => m.start_date || m.due_date);
+  const undated = projectMilestones.filter(m => !m.start_date && !m.due_date);
+
+  if (!dated.length) {
+    // 日付なしのみ → シンプルリスト
+    el.innerHTML = dated.length === 0 ? renderMilestoneSimpleList(projectMilestones, today) : '';
+    return;
+  }
+
+  const allDates = [];
+  dated.forEach(m => {
+    if (m.start_date) allDates.push(new Date(m.start_date+'T00:00:00').getTime());
+    if (m.due_date) allDates.push(new Date(m.due_date+'T00:00:00').getTime());
+  });
+  allDates.push(todayMs);
+  const rangeStart = Math.min(...allDates) - 7 * DAY;
+  const rangeEnd = Math.max(...allDates) + 14 * DAY;
+  const totalDays = Math.max(1, (rangeEnd - rangeStart) / DAY);
+
+  const toPercent = (dateStr) => {
+    const ms = new Date(dateStr+'T00:00:00').getTime();
+    return ((ms - rangeStart) / (rangeEnd - rangeStart)) * 100;
+  };
+  const todayPct = ((todayMs - rangeStart) / (rangeEnd - rangeStart)) * 100;
+
+  // 月ラベル生成
+  const months = [];
+  const startDate = new Date(rangeStart);
+  startDate.setDate(1);
+  while (startDate.getTime() < rangeEnd) {
+    const ms = startDate.getTime();
+    if (ms >= rangeStart) {
+      const pct = ((ms - rangeStart) / (rangeEnd - rangeStart)) * 100;
+      months.push({ label: `${startDate.getMonth()+1}月`, pct });
+    }
+    startDate.setMonth(startDate.getMonth() + 1);
+  }
+
+  // タイムライン描画
+  let html = '<div class="ms-timeline">';
+  // ヘッダー（月ラベル）
+  html += '<div class="ms-header" style="height:20px">';
+  months.forEach(m => { html += `<span class="ms-header-label" style="left:${m.pct}%">${m.label}</span>`; });
+  html += '</div>';
+  // 行エリア
+  html += '<div class="ms-rows">';
+  // 今日ライン
+  html += `<div class="ms-today-line" style="left:${todayPct}%"><div class="ms-today-dot"></div></div>`;
+
+  dated.forEach(m => {
+    const isDone = m.status === 'done';
+    const s = m.start_date || m.due_date;
+    const e = m.due_date || m.start_date;
+    const leftPct = toPercent(s);
+    const rightPct = toPercent(e);
+    const widthPct = Math.max(rightPct - leftPct, 1.5);
+    const endMs = new Date(e+'T00:00:00').getTime();
+    const barClass = isDone ? 'done' : (endMs < todayMs ? 'overdue' : (new Date(s+'T00:00:00').getTime() <= todayMs && endMs >= todayMs ? 'active' : 'pending'));
+
+    html += `<div class="ms-row">`;
+    html += `<div class="ms-row-title" title="${(m.title||'').replace(/"/g,'&quot;')}">${m.title || '無題'}</div>`;
+    html += `<div class="ms-bar-track">`;
+    html += `<div class="ms-bar ${barClass}" style="left:${leftPct}%;width:${widthPct}%" onclick="editMilestone('${m.id}')" title="${s} → ${e}">`;
+    html += `<span class="ms-bar-label">${m.title || ''}</span>`;
+    html += `</div></div>`;
+    html += `<div class="ms-row-actions">`;
+    html += `<button onclick="editMilestone('${m.id}')" title="編集">✎</button>`;
+    html += `<button onclick="deleteMilestone('${m.id}')" title="削除">&times;</button>`;
+    html += `</div></div>`;
+
+    // 編集パネル
+    if (editingMilestoneId === m.id) {
+      html += `<div class="ms-edit-panel">
+        <input type="text" value="${(m.title||'').replace(/"/g,'&quot;')}" placeholder="マイルストーン名" onchange="updateMilestone('${m.id}','title',this.value)">
+        <input type="date" value="${m.start_date||''}" onchange="updateMilestone('${m.id}','start_date',this.value)" title="開始日">
+        <span style="font-size:11px;color:var(--text-tertiary)">→</span>
+        <input type="date" value="${m.due_date||''}" onchange="updateMilestone('${m.id}','due_date',this.value)" title="終了日">
+        <button class="ms-status-toggle ${isDone?'done':''}" onclick="toggleMilestone('${m.id}',${!isDone})">${isDone?'完了':'未完了'}</button>
+      </div>`;
+    }
+  });
+
+  html += '</div></div>';
+
+  // 日付未設定のマイルストーン
+  if (undated.length) {
+    html += '<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-light)">';
+    html += '<div style="font-size:11px;color:var(--text-tertiary);margin-bottom:4px">日付未設定</div>';
+    html += renderMilestoneSimpleList(undated, today);
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function renderMilestoneSimpleList(items, today) {
+  return items.map(m => {
+    const isDone = m.status === 'done';
+    return `<div class="ms-row" style="padding:4px 0">
+      <input type="checkbox" ${isDone?'checked':''} onchange="toggleMilestone('${m.id}',this.checked)" style="accent-color:var(--green)">
+      <input type="text" value="${(m.title||'').replace(/"/g,'&quot;')}" placeholder="名前..."
+        onchange="updateMilestone('${m.id}','title',this.value)"
+        style="flex:1;border:none;background:none;font-size:12px;font-family:var(--font);color:var(--text-primary);outline:none;${isDone?'text-decoration:line-through;opacity:0.5':''}">
+      <input type="date" value="${m.start_date||''}" onchange="updateMilestone('${m.id}','start_date',this.value)" title="開始日"
+        style="font-size:11px;border:1px solid var(--border);border-radius:4px;padding:2px 4px;background:var(--bg-secondary);color:var(--text-secondary)">
+      <span style="font-size:10px;color:var(--text-tertiary)">→</span>
+      <input type="date" value="${m.due_date||''}" onchange="updateMilestone('${m.id}','due_date',this.value)" title="終了日"
+        style="font-size:11px;border:1px solid var(--border);border-radius:4px;padding:2px 4px;background:var(--bg-secondary);color:var(--text-secondary)">
+      <button onclick="deleteMilestone('${m.id}')" style="border:none;background:none;color:var(--text-tertiary);cursor:pointer;padding:2px 4px;font-size:14px">&times;</button>
+    </div>`;
+  }).join('');
+}
+
+function editMilestone(id) {
+  editingMilestoneId = editingMilestoneId === id ? null : id;
+  renderMilestoneList();
+}
+
+async function addMilestone() {
+  const p = getActiveProject(); if (!p) return;
+  const nextOrder = projectMilestones.length;
+  const todayDate = todayStr();
+  const nextWeek = new Date(Date.now() + 7 * 86400000).toISOString().slice(0,10);
+  const { data, error } = await supabase.from('project_milestones')
+    .insert({ project_id: p.id, title: '', start_date: todayDate, due_date: nextWeek, sort_order: nextOrder }).select().single();
+  if (error) { alert('エラー: ' + error.message); return; }
+  projectMilestones.push(data);
+  editingMilestoneId = data.id;
+  renderMilestoneList();
+  setTimeout(() => {
+    const input = document.querySelector('.ms-edit-panel input[type="text"]');
+    if (input) input.focus();
+  }, 50);
+}
+
+async function updateMilestone(id, field, value) {
+  const m = projectMilestones.find(x => x.id === id);
+  if (m) m[field] = value || null;
+  await supabase.from('project_milestones').update({ [field]: value || null }).eq('id', id);
+  renderMilestoneList();
+}
+
+async function toggleMilestone(id, checked) {
+  const status = checked ? 'done' : 'pending';
+  const m = projectMilestones.find(x => x.id === id);
+  if (m) m.status = status;
+  await supabase.from('project_milestones').update({ status }).eq('id', id);
+  renderMilestoneList();
+  if (checked) sendNotification('task_completed', `マイルストーン完了: ${m ? m.title : ''}`);
+}
+
+async function deleteMilestone(id) {
+  if (!confirm('このマイルストーンを削除しますか？')) return;
+  await supabase.from('project_milestones').delete().eq('id', id);
+  projectMilestones = projectMilestones.filter(x => x.id !== id);
+  if (editingMilestoneId === id) editingMilestoneId = null;
+  renderMilestoneList();
+}
+
+// ========== Project Pages (プロジェクト内メモ) ==========
+let projectPages = [];
+
+async function loadProjectPages() {
+  const p = getActiveProject(); if (!p) return;
+  const { data } = await supabase.from('pages').select('id,title,icon,content,updated_at')
+    .eq('project_id', p.id).order('updated_at', { ascending: false });
+  projectPages = data || [];
+  renderProjectPageList();
+}
+
+function renderProjectPageList() {
+  const el = document.getElementById('projectPageList'); if (!el) return;
+  if (!projectPages.length) {
+    el.innerHTML = '<div class="ms-empty">紐づけられたメモなし</div>';
+    return;
+  }
+  el.innerHTML = `<div class="pp-grid">${projectPages.map(pg => {
+    const preview = (pg.content || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    return `<div class="pp-card" onclick="openProjectPage('${pg.id}')">
+      <button class="pp-card-close" onclick="event.stopPropagation();unlinkProjectPage('${pg.id}')" title="紐づけを解除">&times;</button>
+      <div class="pp-card-header">
+        <span class="pp-card-icon">${pg.icon || '📄'}</span>
+        <span class="pp-card-title">${pg.title || '無題'}</span>
+      </div>
+      <div class="pp-card-preview">${preview || 'まだ内容がありません'}</div>
+      <div class="pp-card-date">${new Date(pg.updated_at).toLocaleDateString('ja-JP',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+async function addProjectPage() {
+  const p = getActiveProject(); if (!p) return;
+  const { data, error } = await supabase.from('pages')
+    .insert({ title: '', content: '', created_by: currentUser, project_id: p.id }).select().single();
+  if (error) { alert('エラー: ' + error.message); return; }
+  openProjectPage(data.id);
+}
+
+async function linkExistingPage() {
+  const p = getActiveProject(); if (!p) return;
+  const { data: unlinked } = await supabase.from('pages').select('id,title,icon,updated_at')
+    .is('project_id', null).order('updated_at', { ascending: false });
+  if (!unlinked || !unlinked.length) { alert('紐づけ可能なメモがありません'); return; }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay open';
+  const dialog = document.createElement('div');
+  dialog.className = 'modal';
+  dialog.style.maxHeight = '70vh';
+  dialog.style.overflowY = 'auto';
+
+  let filteredItems = [...unlinked];
+  const renderItems = (query) => {
+    const q = (query || '').toLowerCase();
+    filteredItems = q ? unlinked.filter(pg => (pg.title||'').toLowerCase().includes(q)) : [...unlinked];
+    const list = dialog.querySelector('#linkPageList');
+    if (!list) return;
+    list.innerHTML = filteredItems.map((pg,i) => `<label class="link-page-item" data-idx="${unlinked.indexOf(pg)}">
+      <input type="checkbox" value="${unlinked.indexOf(pg)}">
+      <span class="link-page-icon">${pg.icon || '📄'}</span>
+      <span class="link-page-title">${pg.title || '無題'}</span>
+      <span class="link-page-date">${new Date(pg.updated_at).toLocaleDateString('ja-JP',{month:'short',day:'numeric'})}</span>
+    </label>`).join('') || '<div style="padding:16px;text-align:center;color:var(--text-tertiary);font-size:13px">該当なし</div>';
+  };
+
+  dialog.innerHTML = `<div class="modal-title" style="margin-bottom:16px">メモを紐づける</div>
+    <input type="text" class="link-modal-search" placeholder="メモを検索..." autofocus>
+    <div style="margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+      <label class="link-page-item" style="padding:4px 8px;font-size:12px;color:var(--text-tertiary)">
+        <input type="checkbox" id="linkSelectAll"> すべて選択
+      </label>
+      <span id="linkCount" style="font-size:12px;color:var(--text-tertiary)"></span>
+    </div>
+    <div id="linkPageList"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px">
+      <button class="btn-close-modal" style="width:auto;padding:6px 16px;background:none;border:1px solid var(--border);color:var(--text-secondary)" id="linkCancel">キャンセル</button>
+      <button class="btn-close-modal" style="width:auto;padding:6px 16px;background:var(--accent);color:var(--bg)" id="linkConfirm">紐づける</button>
+    </div>`;
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  renderItems('');
+
+  // 検索
+  dialog.querySelector('.link-modal-search').addEventListener('input', e => renderItems(e.target.value));
+
+  // 全選択
+  dialog.querySelector('#linkSelectAll').addEventListener('change', function() {
+    dialog.querySelectorAll('#linkPageList input[type="checkbox"]').forEach(cb => cb.checked = this.checked);
+    updateLinkCount();
+  });
+
+  // 選択カウント
+  function updateLinkCount() {
+    const count = dialog.querySelectorAll('#linkPageList input:checked').length;
+    const el = dialog.querySelector('#linkCount');
+    if (el) el.textContent = count > 0 ? `${count}件選択中` : '';
+  }
+  dialog.addEventListener('change', updateLinkCount);
+
+  // Escape / overlay click
+  const close = () => overlay.remove();
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  overlay.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+  dialog.querySelector('#linkCancel').onclick = close;
+  dialog.querySelector('#linkConfirm').onclick = async () => {
+    const btn = dialog.querySelector('#linkConfirm');
+    btn.textContent = '処理中...';
+    btn.disabled = true;
+    const checked = dialog.querySelectorAll('#linkPageList input:checked');
+    for (const cb of checked) {
+      const pg = unlinked[cb.value];
+      if (pg) await supabase.from('pages').update({ project_id: p.id }).eq('id', pg.id);
+    }
+    close();
+    loadProjectPages();
+  };
+}
+
+function openProjectPage(pageId) {
+  switchView('pages');
+  setTimeout(async () => {
+    await loadPages();
+    selectPage(pageId);
+  }, 100);
+}
+
+async function unlinkProjectPage(pageId) {
+  await supabase.from('pages').update({ project_id: null }).eq('id', pageId);
+  projectPages = projectPages.filter(pg => pg.id !== pageId);
+  renderProjectPageList();
 }
 
 // ========== Pages (メモ) ==========
@@ -876,7 +1367,8 @@ async function deletePage(id) {
 function getActivePage() { return pages.find(p => p.id === activePageId); }
 
 function renderPageList() {
-  document.getElementById('sidebarList').innerHTML = pages.map(p => {
+  const filtered = sidebarQuery ? pages.filter(p => (p.title||'').toLowerCase().includes(sidebarQuery.toLowerCase())) : pages;
+  document.getElementById('sidebarList').innerHTML = filtered.map(p => {
     const active = p.id === activePageId;
     const preview = p.title || '無題';
     return `<div class="report-item${active ? ' active' : ''}" onclick="selectPage('${p.id}')">
@@ -886,7 +1378,6 @@ function renderPageList() {
   }).join('');
 }
 
-let pageSaveTimer = null;
 function savePageToDb() {
   if (pageSaveTimer) clearTimeout(pageSaveTimer);
   pageSaveTimer = setTimeout(async () => {
@@ -897,6 +1388,29 @@ function savePageToDb() {
     }).eq('id', p.id);
     renderPageList();
   }, 500);
+}
+
+function pageExecCmd(cmd, val) {
+  document.execCommand(cmd, false, val || null);
+  const ed = document.querySelector('.page-wysiwyg');
+  if (ed) ed.focus();
+}
+
+function pageInsertLink() {
+  const url = prompt('URL:');
+  if (url) document.execCommand('createLink', false, url);
+}
+
+function pageSetBlock(tag) {
+  document.execCommand('formatBlock', false, tag);
+}
+
+function onPageContentInput() {
+  const p = getActivePage(); if (!p) return;
+  const ed = document.querySelector('.page-wysiwyg');
+  if (!ed) return;
+  p.content = ed.innerHTML;
+  savePageToDb();
 }
 
 function renderPageEditor() {
@@ -910,24 +1424,50 @@ function renderPageEditor() {
   let projectOpts = '<option value="">プロジェクトに紐付けない</option>';
   projects.forEach(pj => { projectOpts += `<option value="${pj.id}"${p.project_id===pj.id?' selected':''}>${pj.name}</option>`; });
 
+  const contentHtml = plainToHtml(p.content);
+
   pe.innerHTML = `
-    <button class="page-icon-btn" onclick="cyclePageIcon()">${p.icon || '📄'}</button>
-    <input class="project-name-input" value="${p.title || ''}" placeholder="無題"
-      oninput="updatePageField('title',this.value)">
+    <div class="page-header-row">
+      <button class="page-icon-btn" onclick="cyclePageIcon()">${p.icon || '📄'}</button>
+      <input class="project-name-input" value="${p.title || ''}" placeholder="無題"
+        oninput="updatePageField('title',this.value)">
+    </div>
     <div class="page-project-link">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
       <select style="font-size:12px;border:none;outline:none;color:var(--text-tertiary);background:none;cursor:pointer"
         onchange="updatePageField('project_id',this.value||null)">${projectOpts}</select>
     </div>
-    <textarea class="page-content-editor" placeholder="ここに自由に書く..."
-      oninput="updatePageField('content',this.value);autoResize(this)">${p.content || ''}</textarea>
+    <div class="page-toolbar">
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h1')" title="見出し1">H1</button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h2')" title="見出し2">H2</button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h3')" title="見出し3">H3</button>
+      <span class="toolbar-sep"></span>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('bold')" title="太字 (⌘B)"><strong>B</strong></button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('italic')" title="斜体 (⌘I)"><em>I</em></button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('strikeThrough')" title="取り消し線"><del>S</del></button>
+      <span class="toolbar-sep"></span>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('insertUnorderedList')" title="箇条書き">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
+      </button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('insertOrderedList')" title="番号リスト">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="2" y="8" font-size="8" fill="currentColor" stroke="none">1</text><text x="2" y="14" font-size="8" fill="currentColor" stroke="none">2</text><text x="2" y="20" font-size="8" fill="currentColor" stroke="none">3</text></svg>
+      </button>
+      <span class="toolbar-sep"></span>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('formatBlock','blockquote')" title="引用">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V21z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3z"/></svg>
+      </button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageInsertLink()" title="リンク">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      </button>
+      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('p')" title="段落に戻す">¶</button>
+    </div>
+    <div class="page-wysiwyg" contenteditable="true"
+      oninput="onPageContentInput()"
+      data-placeholder="ここに自由に書く...">${contentHtml}</div>
     <div class="report-footer">
       <button class="btn-delete-report" onclick="deletePage('${p.id}')">このメモを削除</button>
       <span class="report-meta">${p.created_by} · ${new Date(p.created_at).toLocaleString('ja-JP')}</span>
     </div>`;
-
-  const contentTA = pe.querySelector('.page-content-editor');
-  if (contentTA) autoResize(contentTA);
 }
 
 const PAGE_ICONS = ['📄','📝','📋','📌','💡','🔖','📎','🗂️','📊','🎯','🚀','⭐'];
@@ -984,7 +1524,11 @@ function renderProjectTaskList() {
       <button class="p-task-expand${isOpen?' open':''}" onclick="toggleTaskExpand(${i})" style="${hasMemo&&!isOpen?'color:var(--text-primary)':''}">
         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
       </button>
-      <button class="p-task-status-btn ${t.status}" onclick="cycleTaskStatus(${i})">${sl[t.status]}</button>
+      <select class="p-task-status-btn ${t.status}" onchange="changeTaskStatus(${i},this.value)">
+        <option value="todo"${t.status==='todo'?' selected':''}>${sl.todo}</option>
+        <option value="in_progress"${t.status==='in_progress'?' selected':''}>${sl.in_progress}</option>
+        <option value="done"${t.status==='done'?' selected':''}>${sl.done}</option>
+      </select>
       <input class="p-task-title" value="${t.title}" placeholder="タスク名..."
         oninput="updateProjectTaskField(${i},'title',this.value)"
         onkeydown="projectTaskKeydown(event,${i})">
@@ -1308,16 +1852,17 @@ async function addProjectTask() {
   setTimeout(()=>{ const inputs=document.querySelectorAll('.p-task-title'); if(inputs.length) inputs[inputs.length-1].focus(); },50);
 }
 
-function cycleTaskStatus(idx) {
-  const next={todo:'in_progress',in_progress:'done',done:'todo'};
+function changeTaskStatus(idx, newStatus) {
   const prevStatus = projectTasks[idx].status;
-  projectTasks[idx].status=next[projectTasks[idx].status];
+  if (prevStatus === newStatus) return;
+  projectTasks[idx].status = newStatus;
   saveProjectTask(idx);
   const p=getActiveProject();
   if(p) p._doneCount=projectTasks.filter(t=>t.status==='done').length;
   renderProjectEditor();
   const sl={todo:'未着手',in_progress:'進行中',done:'完了'};
   const pName = p ? p.name : '';
+  showToast(`「${projectTasks[idx].title}」→ ${sl[newStatus]}`);
   sendNotification('task_status_changed', `🔄 [${pName}] 「${projectTasks[idx].title}」${sl[prevStatus]} → ${sl[projectTasks[idx].status]}`);
   if (projectTasks[idx].status === 'done') {
     projectTasks[idx].completed_by = currentUser;
@@ -1376,7 +1921,7 @@ Object.assign(window, {
   removeTask, taskKeydown, updateTime, setNow,
   updateNotes, submitReport, toggleSidebar, autoResize,
   switchView, createNewProject, selectProject, deleteProject,
-  updateProjectField, addProjectTask, cycleTaskStatus,
+  updateProjectField, addProjectTask, changeTaskStatus,
   updateProjectTaskField, deleteProjectTask, projectTaskKeydown,
   toggleTitleDropdown, openSettings, closeSettings,
   addMember, removeMember, memberOptions,
@@ -1389,8 +1934,11 @@ Object.assign(window, {
   showWebhookHelp, toggleTaskMenu, closeTaskMenu, aiReflectDones,
   toggleAiChat, sendAiChat,
   inviteProjectMember, removeProjectMember,
+  addMilestone, updateMilestone, toggleMilestone, deleteMilestone, editMilestone,
+  addProjectPage, openProjectPage, unlinkProjectPage, linkExistingPage,
   loadPages, createNewPage, selectPage, deletePage,
   updatePageField, cyclePageIcon,
+  pageExecCmd, pageInsertLink, pageSetBlock, onPageContentInput,
   showBulkPanel, addBulkTasks, handleFileUpload,
   toggleVoiceInput, stopVoice,
   showAiPanel, saveAiKey, generateAiTasks, addAiSuggestions
@@ -1648,6 +2196,36 @@ function setupRealtime() {
     })
     .subscribe();
 }
+
+// ========== Sidebar Search ==========
+function filterSidebar(q) {
+  sidebarQuery = q.trim();
+  if (currentView === 'report') renderReportList();
+  else if (currentView === 'project') renderProjectList();
+  else if (currentView === 'pages') renderPageList();
+}
+
+// ========== Keyboard Shortcuts ==========
+document.addEventListener('keydown', (e) => {
+  const isMeta = e.metaKey || e.ctrlKey;
+  // Cmd+N: create new item
+  if (isMeta && e.key === 'n' && !e.shiftKey) {
+    e.preventDefault();
+    if (currentView === 'report') createNewReport();
+    else if (currentView === 'project') createNewProject();
+    else if (currentView === 'pages') createNewPage();
+  }
+  // Cmd+1/2/3: switch views
+  if (isMeta && e.key === '1') { e.preventDefault(); switchView('report'); }
+  if (isMeta && e.key === '2') { e.preventDefault(); switchView('project'); }
+  if (isMeta && e.key === '3') { e.preventDefault(); switchView('pages'); }
+  // Cmd+K: focus sidebar search
+  if (isMeta && e.key === 'k') {
+    e.preventDefault();
+    const searchInput = document.getElementById('sidebarSearch');
+    if (searchInput) searchInput.focus();
+  }
+});
 
 // ========== Init ==========
 document.getElementById('newReportDate').value = todayStr();

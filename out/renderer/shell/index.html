@@ -12,9 +12,12 @@
 <body>
 	<div id="titlebar">
 		<div id="top-tabs">
-			<button class="top-tab active" data-tab="nippo" onclick="switchTopTab('nippo')">日報</button>
+			<button class="top-tab active" data-tab="report" onclick="switchTopTab('report')">日報</button>
+			<button class="top-tab" data-tab="project" onclick="switchTopTab('project')">プロジェクト</button>
+			<button class="top-tab" data-tab="pages" onclick="switchTopTab('pages')">メモ</button>
 			<button class="top-tab" data-tab="canvas" onclick="switchTopTab('canvas')">キャンバス</button>
 		</div>
+		<button type="button" id="titlebar-update-pill" style="display: none;"></button>
 	</div>
 
 	<button type="button" id="nav-toggle" class="panel-toggle" aria-pressed="true" aria-label="Hide Navigator"
@@ -31,7 +34,7 @@
 	<div id="panels">
 		<div id="panel-nav">
 			<div id="nav-toolbar">
-				<button type="button" id="update-pill" style="display: none !important;" disabled hidden></button>
+				<button type="button" id="update-pill" style="display: none;"></button>
 				<div id="workspace-dropdown-row">
 					<div id="workspace-dropdown">
 						<button type="button" id="workspace-trigger">
@@ -88,11 +91,19 @@
 	</div>
 
 	<script>
+	const NIPPO_VIEWS = ['report', 'project', 'pages'];
 	function switchTopTab(tab) {
 		document.querySelectorAll('.top-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
-		document.getElementById('view-nippo').classList.toggle('active', tab === 'nippo');
+		const isNippo = NIPPO_VIEWS.includes(tab);
+		document.getElementById('view-nippo').classList.toggle('active', isNippo);
 		document.getElementById('view-canvas').classList.toggle('active', tab === 'canvas');
 		document.getElementById('nav-toggle').style.display = tab === 'canvas' ? '' : 'none';
+		if (isNippo) {
+			const wv = document.getElementById('nippo-webview');
+			if (wv) {
+				try { wv.executeJavaScript(`switchView('${tab}')`); } catch(e) {}
+			}
+		}
 	}
 	// Force remove loading overlay after 2s fallback
 	setTimeout(() => {
