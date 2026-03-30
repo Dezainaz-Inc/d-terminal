@@ -100,13 +100,13 @@
 		const isNippo = NIPPO_VIEWS.includes(tab);
 		const nippoView = document.getElementById('view-nippo');
 		const canvasView = document.getElementById('view-canvas');
-		// 全ビューを非表示にしてからターゲットを表示
-		nippoView.classList.remove('active');
-		canvasView.classList.remove('active');
+		// ターゲットを先にactiveにしてから他を消す（真っ白防止）
 		if (isNippo) {
 			nippoView.classList.add('active');
+			canvasView.classList.remove('active');
 		} else if (tab === 'canvas') {
 			canvasView.classList.add('active');
+			nippoView.classList.remove('active');
 		}
 		document.getElementById('nav-toggle').style.display = tab === 'canvas' ? '' : 'none';
 		if (isNippo) {

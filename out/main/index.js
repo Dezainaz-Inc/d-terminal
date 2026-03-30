@@ -3686,8 +3686,21 @@ function killSession(sessionId) {
   deleteSessionMeta(sessionId);
 }
 const KILL_ALL_TIMEOUT_MS = 2e3;
+function ensureTmuxServerAlive() {
+  // tmuxサーバーを維持するためのキープアライブセッション
+  try {
+    tmuxExec("has-session", "-t", "keepalive");
+  } catch {
+    try {
+      tmuxExec("new-session", "-d", "-s", "keepalive", "-x", "1", "-y", "1");
+    } catch {}
+  }
+}
+
 function killAllAndWait() {
   shuttingDown$1 = true;
+  // tmuxサーバーを維持（次回起動時にreconnectできるように）
+  ensureTmuxServerAlive();
   if (sessions.size === 0) return Promise.resolve();
   const pending2 = [];
   for (const [id, session2] of sessions) {
@@ -3712,6 +3725,8 @@ function killAllAndWait() {
   ]);
 }
 function discoverSessions() {
+  // tmuxサーバーを確実に起動
+  ensureTmuxServerAlive();
   let tmuxNames;
   try {
     const raw = tmuxExec(
@@ -3719,7 +3734,7 @@ function discoverSessions() {
       "-F",
       "#{session_name}"
     );
-    tmuxNames = raw.split("\n").filter(Boolean);
+    tmuxNames = raw.split("\n").filter(Boolean).filter(n => n !== 'keepalive');
   } catch {
     tmuxNames = [];
   }

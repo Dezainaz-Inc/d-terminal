@@ -464,6 +464,7 @@ function saveToDb() {
   saveTimer = setTimeout(async () => {
     const r = getActive();
     if (!r) return;
+    markSelfChange();
     await supabase.from('daily_reports').update({
       start_time: r.startTime || null, end_time: r.endTime || null,
       todos: r.todos, dones: r.dones, notes: r.notes
@@ -837,6 +838,7 @@ function renderProjectList() {
 }
 
 function saveProjectToDb() {
+  markSelfChange();
   if (projectSaveTimer) clearTimeout(projectSaveTimer);
   projectSaveTimer = setTimeout(async()=>{
     const p = getActiveProject(); if (!p) return;
@@ -853,7 +855,13 @@ async function loadProjectTasks(projectId) {
   const { data } = await supabase.from('project_tasks').select('*')
     .eq('project_id',projectId).order('sort_order').order('created_at');
   projectTasks = data || [];
-  renderProjectEditor();
+  // 入力中はフルDOM再描画しない（テキスト選択が壊れる）
+  const ae = document.activeElement;
+  if (ae && (ae.classList.contains('project-name-input') || ae.classList.contains('project-desc-input'))) {
+    renderProjectTaskList();
+  } else {
+    renderProjectEditor();
+  }
 }
 
 function renderProjectEditor() {
@@ -1030,9 +1038,18 @@ function renderMilestoneList() {
   const dated = projectMilestones.filter(m => m.start_date || m.due_date);
   const undated = projectMilestones.filter(m => !m.start_date && !m.due_date);
 
+  // サマリー
+  const totalMs = projectMilestones.length;
+  const doneMs = projectMilestones.filter(m => m.status === 'done').length;
+  const overdueMs = projectMilestones.filter(m => m.status !== 'done' && m.due_date && new Date(m.due_date+'T00:00:00') < new Date(today+'T00:00:00')).length;
+  let summaryHtml = `<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;font-size:12px">
+    <span style="color:var(--text-secondary)">${doneMs}/${totalMs} 完了</span>
+    ${overdueMs > 0 ? `<span style="color:var(--red);font-weight:600">${overdueMs}件 超過</span>` : ''}
+    <div style="flex:1;height:3px;background:var(--border-light);border-radius:2px;overflow:hidden"><div style="height:100%;width:${totalMs?Math.round(doneMs/totalMs*100):0}%;background:var(--green);border-radius:2px;transition:width 0.3s"></div></div>
+  </div>`;
+
   if (!dated.length) {
-    // 日付なしのみ → シンプルリスト
-    el.innerHTML = dated.length === 0 ? renderMilestoneSimpleList(projectMilestones, today) : '';
+    el.innerHTML = summaryHtml + renderMilestoneSimpleList(projectMilestones, today);
     return;
   }
 
@@ -1066,7 +1083,7 @@ function renderMilestoneList() {
   }
 
   // タイムライン描画
-  let html = '<div class="ms-timeline">';
+  let html = summaryHtml + '<div class="ms-timeline">';
   // ヘッダー（月ラベル）
   html += '<div class="ms-header" style="height:20px">';
   months.forEach(m => { html += `<span class="ms-header-label" style="left:${m.pct}%">${m.label}</span>`; });
@@ -1089,7 +1106,8 @@ function renderMilestoneList() {
     html += `<div class="ms-row">`;
     html += `<div class="ms-row-title" title="${(m.title||'').replace(/"/g,'&quot;')}">${m.title || '無題'}</div>`;
     html += `<div class="ms-bar-track">`;
-    html += `<div class="ms-bar ${barClass}" style="left:${leftPct}%;width:${widthPct}%" onclick="editMilestone('${m.id}')" title="${s} → ${e}">`;
+    const dateLabel = s.slice(5).replace('-','/') + ' → ' + e.slice(5).replace('-','/');
+    html += `<div class="ms-bar ${barClass}" style="left:${leftPct}%;width:${widthPct}%" onclick="editMilestone('${m.id}')" title="${m.title||'無題'}: ${dateLabel}">`;
     html += `<span class="ms-bar-label">${m.title || ''}</span>`;
     html += `</div></div>`;
     html += `<div class="ms-row-actions">`;
@@ -1382,6 +1400,7 @@ function savePageToDb() {
   if (pageSaveTimer) clearTimeout(pageSaveTimer);
   pageSaveTimer = setTimeout(async () => {
     const p = getActivePage(); if (!p) return;
+    markSelfChange();
     await supabase.from('pages').update({
       title: p.title, content: p.content, icon: p.icon,
       project_id: p.project_id || null, updated_at: new Date().toISOString()
@@ -1532,6 +1551,7 @@ function renderProjectTaskList() {
       <input class="p-task-title" value="${t.title}" placeholder="タスク名..."
         oninput="updateProjectTaskField(${i},'title',this.value)"
         onkeydown="projectTaskKeydown(event,${i})">
+      ${t.due_date ? (() => { const d=Math.ceil((new Date(t.due_date+'T00:00:00')-new Date(todayStr()+'T00:00:00'))/86400000); return d<0?'<span style="font-size:10px;color:var(--red);font-weight:600;flex-shrink:0">超過</span>':d===0?'<span style="font-size:10px;color:var(--red);font-weight:600;flex-shrink:0">今日</span>':d<=3?`<span style="font-size:10px;color:var(--accent-warm);font-weight:500;flex-shrink:0">残${d}日</span>`:`<span style="font-size:10px;color:var(--text-tertiary);flex-shrink:0">${t.due_date.slice(5).replace('-','/')}</span>`; })() : ''}
       <select class="p-task-assignee-select" onchange="updateProjectTaskField(${i},'assignee',this.value)">
         ${memberOptions(t.assignee||'')}
       </select>
@@ -1539,6 +1559,12 @@ function renderProjectTaskList() {
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     ${isOpen ? `<div class="p-task-detail">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <label style="font-size:11px;color:var(--text-tertiary);white-space:nowrap">期日</label>
+        <input type="date" value="${t.due_date||''}" onchange="updateProjectTaskField(${i},'due_date',this.value)"
+          style="font-size:12px;border:1px solid var(--border);border-radius:var(--radius);padding:3px 8px;background:var(--bg-secondary);color:var(--text-secondary);font-family:var(--font)">
+        ${t.due_date ? (() => { const d=Math.ceil((new Date(t.due_date+'T00:00:00')-new Date(todayStr()+'T00:00:00'))/86400000); return d<0?'<span style="font-size:11px;color:var(--red);font-weight:600">期限超過</span>':d===0?'<span style="font-size:11px;color:var(--red);font-weight:600">今日</span>':d<=3?`<span style="font-size:11px;color:var(--accent-warm);font-weight:500">残${d}日</span>`:''; })() : ''}
+      </div>
       <textarea class="p-task-memo" placeholder="メモを入力..."
         oninput="updateProjectTaskField(${i},'description',this.value);autoResize(this)">${t.description||''}</textarea>
     </div>` : ''}`;
@@ -2180,25 +2206,68 @@ function removeChatTyping() {
 }
 
 // ========== Realtime ==========
+// リアルタイム同期のデバウンス（自分の保存直後は無視）
+let realtimeIgnoreUntil = 0;
+function markSelfChange() { realtimeIgnoreUntil = Date.now() + 1500; }
+function isSelfChange() { return Date.now() < realtimeIgnoreUntil; }
+
 function setupRealtime() {
   supabase.channel('db-changes')
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_reports' }, () => {
-      if (currentView === 'report') loadReports();
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'daily_reports' }, (payload) => {
+      if (isSelfChange()) return;
+      if (currentView === 'report') {
+        // 開いている日報以外の変更 or 一覧更新
+        const r = getActive();
+        if (r && payload.new && payload.new.id === r.id) {
+          // 他ユーザーが同じ日報を更新 → マージ
+          const updated = mapRow(payload.new);
+          Object.assign(r, updated);
+          renderEditor();
+          renderReportList();
+        } else {
+          loadReports();
+        }
+      }
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'projects' }, () => {
+      if (isSelfChange()) return;
       if (currentView === 'project') loadProjects();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'project_tasks' }, () => {
+      if (isSelfChange()) return;
       if (currentView === 'project' && activeProjectId) loadProjectTasks(activeProjectId);
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'project_milestones' }, () => {
+      if (isSelfChange()) return;
       if (currentView === 'project' && activeProjectId) loadMilestones();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'project_members' }, () => {
+      if (isSelfChange()) return;
       if (currentView === 'project' && activeProjectId) loadProjectMembers();
     })
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'pages' }, () => {
-      if (currentView === 'pages') loadPages();
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'pages' }, (payload) => {
+      if (isSelfChange()) return;
+      if (currentView === 'pages') {
+        const activePg = getActivePage();
+        if (activePg && payload.new && payload.new.id === activePg.id) {
+          // 他ユーザーが同じメモを更新 → 内容を反映
+          Object.assign(activePg, payload.new);
+          const ed = document.querySelector('.page-wysiwyg');
+          if (ed && ed.innerHTML !== activePg.content) {
+            // カーソル位置をできるだけ保持
+            const sel = window.getSelection();
+            const hadFocus = document.activeElement === ed;
+            ed.innerHTML = activePg.content || '';
+            if (hadFocus && sel.rangeCount) {
+              try { ed.focus(); } catch(e) {}
+            }
+          }
+          // タイトル等もサイドバーに反映
+          renderPageList();
+        } else {
+          loadPages();
+        }
+      }
       if (currentView === 'project' && activeProjectId) loadProjectPages();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'team_members' }, () => {
