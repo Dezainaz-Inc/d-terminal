@@ -431,7 +431,7 @@ function UpdatePane() {
   const [checking, setChecking] = reactExports.useState(false);
   reactExports.useEffect(() => {
     api.updateGetStatus().then((s) => setStatus(s)).catch(() => {});
-    const off = api.onUpdateStatus((_event, s) => {
+    const off = api.onUpdateStatus((s) => {
       setStatus(s);
       setChecking(false);
     });

@@ -230,6 +230,7 @@ electron.contextBridge.exposeInMainWorld("api", {
   // Auto-updater
   updateGetStatus: () => electron.ipcRenderer.invoke("update:getStatus"),
   updateCheck: () => electron.ipcRenderer.invoke("update:check"),
+  updateDownload: () => electron.ipcRenderer.invoke("update:download"),
   updateInstall: () => electron.ipcRenderer.send("update:install"),
   onUpdateStatus: (cb) => {
     const handler = (_event, state) => cb(state);

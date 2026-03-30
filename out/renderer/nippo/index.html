@@ -19,16 +19,13 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="sidebar-header-left">
-          <div class="sidebar-logo">D-Terminal</div>
-          <div class="title-dropdown">
-            <button class="title-dropdown-btn" id="titleDropdownBtn" onclick="toggleTitleDropdown()">
-              <span id="titleLabel">日報</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-            </button>
+          <span id="titleLabel" class="sidebar-view-label">日報</span>
+          <!-- dropdown kept hidden for JS compat -->
+          <div class="title-dropdown" style="display:none">
             <div class="title-dropdown-menu" id="titleDropdownMenu">
-              <button class="title-dropdown-option active" id="optReport" onclick="switchView('report')">日報</button>
-              <button class="title-dropdown-option" id="optProject" onclick="switchView('project')">プロジェクト</button>
-              <button class="title-dropdown-option" id="optPages" onclick="switchView('pages')">メモ</button>
+              <button class="title-dropdown-option active" id="optReport">日報</button>
+              <button class="title-dropdown-option" id="optProject">プロジェクト</button>
+              <button class="title-dropdown-option" id="optPages">メモ</button>
             </div>
           </div>
         </div>
@@ -70,8 +67,14 @@
         </div>
       </div>
 
+      <div class="sidebar-search-wrap" id="sidebarSearchWrap">
+        <svg class="sidebar-search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input class="sidebar-search" id="sidebarSearch" placeholder="検索..." oninput="filterSidebar(this.value)">
+      </div>
       <div class="sidebar-list" id="sidebarList"></div>
     </aside>
+
+    <div class="toast" id="toast"></div>
 
     <main class="main" id="main">
       <div class="empty-state" id="emptyState">
