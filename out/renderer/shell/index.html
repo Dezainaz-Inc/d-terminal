@@ -17,6 +17,7 @@
 			<button class="top-tab" data-tab="pages" onclick="switchTopTab('pages')">メモ</button>
 			<button class="top-tab" data-tab="canvas" onclick="switchTopTab('canvas')">キャンバス</button>
 		</div>
+		<span id="app-version" style="font-size:10px;color:var(--muted);font-family:'IBM Plex Mono',monospace;opacity:0.5;margin-right:8px;user-select:none"></span>
 		<button type="button" id="titlebar-update-pill" style="display: none;"></button>
 	</div>
 
@@ -91,6 +92,14 @@
 	</div>
 
 	<script>
+	// バージョン表示
+	(async () => {
+		try {
+			const v = await (window.shellApi || window.api).getAppVersion();
+			const el = document.getElementById('app-version');
+			if (el && v) el.textContent = 'v' + v;
+		} catch(e) {}
+	})();
 	const NIPPO_VIEWS = ['report', 'project', 'pages'];
 	let currentTopTab = 'report';
 	function switchTopTab(tab) {
