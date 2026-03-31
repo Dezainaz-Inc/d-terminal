@@ -4021,8 +4021,8 @@ if (app.isPackaged && process.platform === "darwin") {
 const DEFAULT_STATE = {
   x: 0,
   y: 0,
-  width: 1200,
-  height: 800
+  width: 1440,
+  height: 900
 };
 function boundsVisibleOnAnyDisplay(bounds) {
   const displays = screen.getAllDisplays();

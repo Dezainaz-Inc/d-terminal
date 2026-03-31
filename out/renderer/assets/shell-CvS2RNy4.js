@@ -1,12 +1,12 @@
 const tiles = [];
 let nextZIndex = 1;
 const DEFAULT_TILE_SIZES = {
-  term: { width: 400, height: 500 },
+  term: { width: 480, height: 720 },
   note: { width: 440, height: 540 },
   code: { width: 440, height: 540 },
   image: { width: 280, height: 280 },
   graph: { width: 600, height: 500 },
-  browser: { width: 480, height: 640 }
+  browser: { width: 1024, height: 768 }
 };
 function defaultSize(type) {
   return { ...DEFAULT_TILE_SIZES[type] };
