@@ -4415,7 +4415,7 @@ ipcMain.handle(
     } catch (err) {
       console.warn(`[pty] reconnect failed for ${sessionId}: ${err.message}`);
       deleteSessionMeta(sessionId);
-      return null;
+      throw err; // rendererのcatchに落ちるようにthrow
     }
   }
 );

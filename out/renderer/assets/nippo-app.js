@@ -1958,7 +1958,7 @@ Object.assign(window, {
   addNotifSetting, updateNotifSetting, toggleNotifSetting,
   deleteNotifSetting, toggleGlobalTrigger,
   showWebhookHelp, toggleTaskMenu, closeTaskMenu, aiReflectDones,
-  toggleAiChat, sendAiChat,
+  toggleAiChat, sendAiChat, handleAiImageSelect, handleAiImagePaste, clearAiImage,
   inviteProjectMember, removeProjectMember,
   addMilestone, updateMilestone, toggleMilestone, deleteMilestone, editMilestone,
   addProjectPage, openProjectPage, unlinkProjectPage, linkExistingPage,
@@ -1972,6 +1972,56 @@ Object.assign(window, {
 
 // ========== AI Chat Bot ==========
 let aiChatHistory = [];
+let aiPendingImage = null; // { base64, mimeType, name }
+
+function handleAiImageSelect(input) {
+  const file = input.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const base64 = reader.result.split(',')[1];
+    aiPendingImage = { base64, mimeType: file.type, name: file.name };
+    showAiImagePreview(file.name, URL.createObjectURL(file));
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function handleAiImagePaste(event) {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      event.preventDefault();
+      const file = item.getAsFile();
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64 = reader.result.split(',')[1];
+        aiPendingImage = { base64, mimeType: file.type, name: 'pasted-image.png' };
+        showAiImagePreview('ペースト画像', URL.createObjectURL(file));
+      };
+      reader.readAsDataURL(file);
+      break;
+    }
+  }
+}
+
+function showAiImagePreview(name, url) {
+  const el = document.getElementById('aiImagePreview');
+  if (!el) return;
+  el.style.display = 'flex';
+  el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius);font-size:12px;color:var(--text-secondary)">
+    <img src="${url}" style="width:32px;height:32px;object-fit:cover;border-radius:4px">
+    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</span>
+    <button onclick="clearAiImage()" style="border:none;background:none;color:var(--text-tertiary);cursor:pointer;font-size:16px;padding:0 2px">&times;</button>
+  </div>`;
+}
+
+function clearAiImage() {
+  aiPendingImage = null;
+  const el = document.getElementById('aiImagePreview');
+  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+}
 
 function toggleAiChat() {
   const panel = document.getElementById('aiChatPanel');
@@ -1988,20 +2038,30 @@ function toggleAiChat() {
 async function sendAiChat() {
   const input = document.getElementById('aiChatInput');
   const msg = input.value.trim();
-  if (!msg) return;
+  if (!msg && !aiPendingImage) return;
   input.value = '';
 
   // Show user message
-  appendChatMsg('user', msg);
+  const displayMsg = aiPendingImage ? `📎 ${aiPendingImage.name}\n${msg}` : msg;
+  appendChatMsg('user', displayMsg);
   appendChatMsg('typing', '考え中...');
 
   const btn = document.getElementById('aiChatSendBtn');
   btn.disabled = true;
 
+  // 画像パーツを構築
+  const userParts = [];
+  if (aiPendingImage) {
+    userParts.push({ inline_data: { mime_type: aiPendingImage.mimeType, data: aiPendingImage.base64 } });
+  }
+  userParts.push({ text: msg || 'この画像について教えてください' });
+  const sentImage = aiPendingImage;
+  clearAiImage();
+
   try {
     // Build context
     const ctx = await buildAiContext();
-    aiChatHistory.push({ role: 'user', parts: [{ text: msg }] });
+    aiChatHistory.push({ role: 'user', parts: userParts });
 
     const systemPrompt = `あなたはDezainaz社内ツールのAIアシスタントです。ユーザーの指示に従い、データを操作してください。
 
