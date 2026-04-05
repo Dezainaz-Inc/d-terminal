@@ -10,7 +10,16 @@ permissions:
 
 jobs:
   build-mac:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            arch: arm64
+            brew_prefix: /opt/homebrew
+          - runner: macos-13
+            arch: x64
+            brew_prefix: /usr/local
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,24 +31,35 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Rebuild native modules
-        run: npx @electron/rebuild
+        run: npx @electron/rebuild --arch=${{ matrix.arch }}
 
       - name: Prepare tmux for bundle
         run: |
           brew install tmux
 
           TMUX_BIN="$(which tmux)"
-          echo "tmux binary: $TMUX_BIN"
+          echo "tmux binary: $TMUX_BIN (arch: ${{ matrix.arch }})"
+          file "$TMUX_BIN"
           cp "$TMUX_BIN" resources/tmux
           chmod +x resources/tmux
 
           # Copy dynamic library dependencies from brew
           mkdir -p resources/lib
-          otool -L "$TMUX_BIN" | tail -n +2 | awk '{print $1}' | grep '/opt/homebrew\|/usr/local' | while read -r lib; do
+          otool -L "$TMUX_BIN" | tail -n +2 | awk '{print $1}' | grep '${{ matrix.brew_prefix }}' | while read -r lib; do
             echo "Copying lib: $lib"
             cp "$lib" resources/lib/
             libname="$(basename "$lib")"
             install_name_tool -change "$lib" "@loader_path/lib/$libname" resources/tmux
+          done
+
+          # Fix lib interdependencies
+          for libfile in resources/lib/*.dylib; do
+            otool -L "$libfile" | tail -n +2 | awk '{print $1}' | grep '${{ matrix.brew_prefix }}' | while read -r dep; do
+              depname="$(basename "$dep")"
+              if [ -f "resources/lib/$depname" ]; then
+                install_name_tool -change "$dep" "@loader_path/$depname" "$libfile"
+              fi
+            done
           done
 
           # Generate terminfo
@@ -48,12 +68,15 @@ jobs:
           tic -o resources/terminfo /tmp/xterm-256color.ti
 
           # Verify
+          echo "=== tmux architecture ==="
+          file resources/tmux
           echo "=== tmux dependencies ==="
           otool -L resources/tmux
           echo "=== lib contents ==="
           ls -la resources/lib/
+          for f in resources/lib/*.dylib; do file "$f"; done
 
       - name: Build & Publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac --publish always
+        run: npx electron-builder --mac --${{ matrix.arch }} --publish always

@@ -6,7 +6,13 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Convert plain text / markdown to HTML for WYSIWYG migration
 function plainToHtml(src) {
   if (!src) return '';
-  if (src.trim().startsWith('<') && /<\/(p|div|h[1-3]|ul|ol|blockquote)>/.test(src)) return src;
+  // 既にHTMLとして保存されたコンテンツはそのまま返す
+  if (/<(br|p|div|h[1-6]|ul|ol|li|blockquote|strong|em|a |code|pre|del|span)\b/i.test(src)) return src;
+  // 以前のバグでエスケープされて保存されたHTMLを修復
+  if (/&lt;(br|p|div|h[1-6]|ul|ol|li|blockquote|strong|em|a |code|pre|del|span)\b/i.test(src)) {
+    return src.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  }
+  // プレーンテキスト/Markdownの場合のみ変換
   let html = src
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/```(\w*)\n([\s\S]*?)```/g, (_, l, c) => `<pre><code>${c}</code></pre>`)
@@ -50,6 +56,146 @@ let pages = [];
 let activePageId = null;
 
 let sidebarQuery = '';
+
+// ========== Worklog Calendar ==========
+let wlMonth = new Date().getMonth();
+let wlYear = new Date().getFullYear();
+let wlUser = ''; // '' = 全員, or specific username
+let wlData = []; // all fetched reports for calendar
+let wlOpen = true;
+
+async function loadWorklogData() {
+  const start = `${wlYear}-${String(wlMonth + 1).padStart(2, '0')}-01`;
+  const endDate = new Date(wlYear, wlMonth + 1, 0);
+  const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
+  const { data } = await supabase.from('daily_reports').select('date,username,start_time,end_time')
+    .gte('date', start).lte('date', end);
+  wlData = data || [];
+  renderWorklogCalendar();
+}
+
+function calcHours(st, et) {
+  if (!st || !et) return 0;
+  const [sh, sm] = st.split(':').map(Number);
+  const [eh, em] = et.split(':').map(Number);
+  const h = (eh * 60 + em - sh * 60 - sm) / 60;
+  return Math.max(0, Math.round(h * 10) / 10);
+}
+
+function renderWorklogCalendar() {
+  const el = document.getElementById('worklogCalendar');
+  if (!el) return;
+
+  if (!wlOpen) {
+    el.innerHTML = '';
+    return;
+  }
+
+  const today = todayStr();
+  const daysInMonth = new Date(wlYear, wlMonth + 1, 0).getDate();
+  const firstDow = new Date(wlYear, wlMonth, 1).getDay(); // 0=Sun
+
+  // Filter by user
+  const filtered = wlUser ? wlData.filter(d => d.username === wlUser) : wlData;
+
+  // Build date→hours map (aggregate if all users)
+  const dateHours = {};
+  for (const d of filtered) {
+    const h = calcHours(d.start_time, d.end_time);
+    if (h > 0) dateHours[d.date] = (dateHours[d.date] || 0) + h;
+  }
+
+  const maxH = Math.max(10, ...Object.values(dateHours));
+
+  // Month label
+  const monthNames = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+  const dayLabels = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  // Build weeks
+  const weeks = [];
+  let week = new Array(firstDow).fill(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    week.push(d);
+    if (week.length === 7) { weeks.push(week); week = []; }
+  }
+  if (week.length) { while (week.length < 7) week.push(null); weeks.push(week); }
+
+  // Member chips
+  const allUsers = [...new Set(wlData.map(d => d.username))].sort();
+  const memberChips = `<button class="wl-member-chip${wlUser === '' ? ' active' : ''}" onclick="setWlUser('')">ALL</button>` +
+    allUsers.map(u => `<button class="wl-member-chip${wlUser === u ? ' active' : ''}" onclick="setWlUser('${u}')">${u}</button>`).join('');
+
+  // Grid HTML
+  let gridHtml = dayLabels.map(d => `<div class="wl-day-label">${d}</div>`).join('') + `<div class="wl-week-label">WEEK</div>`;
+
+  weeks.forEach(wk => {
+    let weekTotal = 0;
+    let hasAnyHours = false;
+    wk.forEach(day => {
+      if (day === null) {
+        gridHtml += `<div class="wl-cell empty"></div>`;
+        return;
+      }
+      const dateStr = `${wlYear}-${String(wlMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+      const h = dateHours[dateStr] || 0;
+      weekTotal += h;
+      if (h > 0) hasAnyHours = true;
+      const isToday = dateStr === today;
+      const pct = h > 0 ? Math.max(15, Math.min(100, (h / maxH) * 100)) : 0;
+      const cls = `wl-cell${isToday ? ' today' : ''}${h > 0 ? ' has-hours' : ''}`;
+      gridHtml += `<div class="${cls}">
+        <div class="wl-date">${day}</div>
+        <div class="wl-dot"><div class="wl-dot-fill" style="height:${pct}%;border-radius:${pct >= 95 ? '50%' : '0 0 50% 50%'}"></div></div>
+        <div class="wl-hours">${h > 0 ? h.toFixed(1) + 'h' : ''}</div>
+      </div>`;
+    });
+    const wtCls = `wl-week-total${hasAnyHours ? ' has-hours' : ''}${!hasAnyHours ? ' empty-row' : ''}`;
+    gridHtml += `<div class="${wtCls}"><span class="wl-wt-val">${weekTotal > 0 ? weekTotal.toFixed(1) + 'h' : ''}</span></div>`;
+  });
+
+  // Summary stats
+  const totalH = Object.values(dateHours).reduce((a, b) => a + b, 0);
+  const workDays = Object.keys(dateHours).length;
+  const avgH = workDays > 0 ? (totalH / workDays) : 0;
+
+  el.innerHTML = `<div class="wl-calendar">
+    <div class="wl-header">
+      <div class="wl-title">worklog</div>
+      <div class="wl-nav">
+        <button class="wl-nav-btn" onclick="wlPrev()">‹</button>
+        <div class="wl-month">${wlYear}.${String(wlMonth + 1).padStart(2, '0')}</div>
+        <button class="wl-nav-btn" onclick="wlNext()">›</button>
+      </div>
+    </div>
+    <div class="wl-members">${memberChips}</div>
+    <div class="wl-grid">${gridHtml}</div>
+    <div class="wl-summary">
+      <div class="wl-stat">
+        <div class="wl-stat-label">total</div>
+        <div class="wl-stat-val">${totalH.toFixed(1)}<span class="wl-stat-unit">h</span></div>
+      </div>
+      <div class="wl-stat">
+        <div class="wl-stat-label">days</div>
+        <div class="wl-stat-val">${workDays}<span class="wl-stat-unit">d</span></div>
+      </div>
+      <div class="wl-stat">
+        <div class="wl-stat-label">avg</div>
+        <div class="wl-stat-val">${avgH.toFixed(1)}<span class="wl-stat-unit">h/d</span></div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function setWlUser(u) { wlUser = u; renderWorklogCalendar(); }
+function wlPrev() { wlMonth--; if (wlMonth < 0) { wlMonth = 11; wlYear--; } loadWorklogData(); }
+function wlNext() { wlMonth++; if (wlMonth > 11) { wlMonth = 0; wlYear++; } loadWorklogData(); }
+function toggleWorklog() {
+  wlOpen = !wlOpen;
+  const icon = document.querySelector('.wl-toggle-icon');
+  if (icon) icon.classList.toggle('open', wlOpen);
+  if (wlOpen) loadWorklogData();
+  else { const el = document.getElementById('worklogCalendar'); if (el) el.innerHTML = ''; }
+}
 
 // ========== Toast ==========
 let toastTimer = null;
@@ -238,7 +384,7 @@ function renderNotifTriggersList() {
   }
   const events = [
     { key: 'report_created', label: '日報が作成された時' },
-    { key: 'report_submitted', label: '日報が提出された時（稼働終了入力）' },
+    { key: 'report_submitted', label: '日報が提出された時' },
     { key: 'task_created', label: 'タスクが作成された時' },
     { key: 'task_status_changed', label: 'タスクのステータスが変更された時' },
     { key: 'task_completed', label: 'タスクが完了した時' },
@@ -432,9 +578,15 @@ function switchView(view) {
     document.getElementById('emptyState').style.display = 'flex';
     const emptyTexts = { report: '「新しい日報を作成」で始めましょう', project: '「新しいプロジェクト」で始めましょう', pages: '「新しいメモ」で始めましょう' };
     document.getElementById('emptyText').textContent = emptyTexts[view] || '';
-    if (view === 'report') { activeProjectId = null; activePageId = null; loadReports(); }
-    else if (view === 'project') { activeId = null; activePageId = null; loadProjects(); }
-    else if (view === 'pages') { activeId = null; activeProjectId = null; loadPages(); }
+    // 全てのアクティブIDをクリアしてから新しいビューをロード
+    activeId = null; activeProjectId = null; activePageId = null;
+    // エディタ内の古いコンテンツもクリア
+    document.getElementById('editor').innerHTML = '';
+    document.getElementById('projectEditor').innerHTML = '';
+    document.getElementById('pageEditor').innerHTML = '';
+    if (view === 'report') { loadReports(); }
+    else if (view === 'project') { loadProjects(); }
+    else if (view === 'pages') { loadPages(); }
   }
   closeSidebarMobile();
 }
@@ -446,7 +598,8 @@ function mapRow(row) {
     startTime: row.start_time ? row.start_time.slice(0,5) : '',
     endTime: row.end_time ? row.end_time.slice(0,5) : '',
     todos: row.todos || [], dones: row.dones || [],
-    notes: row.notes || '', createdAt: row.created_at
+    notes: row.notes || '', createdAt: row.created_at,
+    submittedAt: row.submitted_at || null
   };
 }
 
@@ -473,11 +626,13 @@ function saveToDb() {
 }
 
 async function loadReports() {
+  const viewAtStart = currentView;
   const { data, error } = await supabase
     .from('daily_reports').select('*')
     .eq('username', currentUser)
     .order('date', { ascending: false });
   if (error) { console.error('Load error:', error); return; }
+  if (currentView !== viewAtStart) return; // ビューが変わっていたら中断
   reports = data.map(mapRow);
   // 今日の日報を自動作成
   const today = todayStr();
@@ -585,7 +740,7 @@ function renderReportList() {
     const isActive = r.id === activeId;
     const isToday = r.date === today;
     const hasTime = r.startTime && !r.endTime;
-    const status = hasTime ? '稼働中' : (r.endTime ? '完了' : '未開始');
+    const status = r.submittedAt ? '提出済' : (hasTime ? '稼働中' : (r.startTime ? '稼働終了' : '未開始'));
     const sc = hasTime ? ' working' : '';
     return `<div class="report-item${isActive?' active':''}${isToday?' today':''}" onclick="selectReport('${r.id}')">
       <div class="report-item-date">${formatDate(r.date)}${isToday?' <span style="font-size:10px;color:var(--accent-warm);font-weight:600">TODAY</span>':''}</div>
@@ -601,6 +756,12 @@ function renderEditor() {
   document.getElementById('projectEditor').style.display = 'none';
   const ed = document.getElementById('editor'); ed.style.display = 'block';
   ed.innerHTML = `
+    <button class="wl-toggle" onclick="toggleWorklog()">
+      <span class="wl-toggle-icon${wlOpen ? ' open' : ''}"><svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 1l4 4-4 4"/></svg></span>
+      <span>worklog</span>
+      <span class="wl-toggle-line"></span>
+    </button>
+    <div id="worklogCalendar"></div>
     <div class="report-date-display">${formatDate(r.date)}</div>
     <div class="report-weekday">${getWeekday(r.date)}</div>
     <div class="time-section">
@@ -620,7 +781,7 @@ function renderEditor() {
     <div class="section"><div class="section-header">
       <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
       <span class="section-title">今日やったこと</span>
-      <button onclick="aiReflectDones()" style="margin-left:auto;font-family:'Inter',sans-serif;font-size:11px;font-weight:500;color:var(--text-tertiary);background:none;border:none;cursor:pointer;padding:2px 0;transition:color 150ms ease" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-tertiary)'"
+      <button onclick="aiReflectDones()" style="margin-left:auto;font-family:var(--font);font-size:11px;font-weight:500;color:var(--text-tertiary);background:none;border:none;cursor:pointer;padding:2px 0;transition:color 150ms ease" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-tertiary)'"
         >+ 完了タスクから反映</button></div>
       <ul class="task-list" id="doneList"></ul>
       <button class="btn-add-task" onclick="addTask('dones')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>タスクを追加</button></div>
@@ -629,14 +790,15 @@ function renderEditor() {
       <span class="section-title">メモ</span></div>
       <textarea class="notes-textarea" placeholder="自由にメモを残せます..." oninput="updateNotes(this.value)">${r.notes}</textarea></div>
     <div style="margin-top:32px">
-      <button class="btn-submit-report${r.endTime?' submitted':''}" onclick="submitReport()" ${r.endTime?'disabled':''}>
-        ${r.endTime?'提出済み ✓':'日報を提出'}
+      <button class="btn-submit-report${r.submittedAt?' submitted':''}" onclick="submitReport()" ${r.submittedAt?'disabled':''}>
+        ${r.submittedAt?'提出済み ✓':'日報を提出'}
       </button>
     </div>
     <div class="report-footer">
       <button class="btn-delete-report" onclick="deleteReport('${r.id}')">この日報を削除</button>
       <span class="report-meta">作成: ${new Date(r.createdAt).toLocaleString('ja-JP')}</span></div>`;
   renderTasks('todos','todoList'); renderTasks('dones','doneList');
+  if (wlOpen) loadWorklogData();
 }
 
 function renderTasks(key, listId) {
@@ -714,22 +876,35 @@ async function importProjectTasks() {
 
 function updateTime(field,val) {
   const r = getActive(); if (!r) return; r[field]=val; saveToDb(); renderReportList();
-  if (field === 'endTime' && val) sendNotification('report_submitted', `✅ ${currentUser}が${formatDate(r.date)}の日報を提出しました（稼働終了: ${val}）`);
 }
 function setNow(field) { const t = nowTime(); document.getElementById(field).value=t; updateTime(field,t); }
 function updateNotes(val) { const r = getActive(); if (!r) return; r.notes=val; saveToDb(); }
 
-function submitReport() {
+async function submitReport() {
   const r = getActive(); if (!r) return;
   if (!r.startTime) { alert('稼働開始時刻を入力してください'); return; }
   const endTime = r.endTime || nowTime();
   r.endTime = endTime;
+  r.submittedAt = new Date().toISOString();
   document.getElementById('endTime').value = endTime;
-  saveToDb();
+  // submitted_at をDBに直接保存
+  markSelfChange();
+  await supabase.from('daily_reports').update({
+    start_time: r.startTime || null, end_time: r.endTime || null,
+    todos: r.todos, dones: r.dones, notes: r.notes,
+    submitted_at: r.submittedAt
+  }).eq('id', r.id);
   renderReportList();
   renderEditor();
   showToast('日報を提出しました');
-  sendNotification('report_submitted', `✅ ${currentUser}が${formatDate(r.date)}の日報を提出しました（${r.startTime}〜${endTime}）`);
+  // 日報概要を組み立てて通知
+  const todosSummary = r.todos.filter(t => t.text).map(t => `${t.done ? '✅' : '⬜'} ${t.text}`).join('\n');
+  const donesSummary = r.dones.filter(t => t.text).map(t => `✅ ${t.text}`).join('\n');
+  const lines = [`📋 *${currentUser}* の日報 (${formatDate(r.date)})`, `⏰ ${r.startTime} 〜 ${endTime}`];
+  if (todosSummary) lines.push(`\n*【今日やること】*\n${todosSummary}`);
+  if (donesSummary) lines.push(`\n*【今日やったこと】*\n${donesSummary}`);
+  if (r.notes) lines.push(`\n*【メモ】*\n${r.notes}`);
+  sendNotification('report_submitted', lines.join('\n'));
 }
 
 
@@ -767,12 +942,14 @@ async function aiReflectDones() {
 
 // ========== PROJECTS ==========
 async function loadProjects() {
+  const viewAtStart = currentView;
   // Get projects where current user is a member
   const { data: memberships } = await supabase.from('project_members')
     .select('project_id').eq('username', currentUser);
   const myProjectIds = memberships ? memberships.map(m => m.project_id) : [];
 
   const { data } = await supabase.from('projects').select('*').order('created_at',{ascending:false});
+  if (currentView !== viewAtStart) return; // ビューが変わっていたら中断
   // Filter to only my projects
   projects = (data || []).filter(p => myProjectIds.includes(p.id));
   for (const p of projects) {
@@ -947,7 +1124,7 @@ function renderProjectEditor() {
           <option value="">メンバーを招待...</option>
           ${teamMembers.map(m => `<option value="${m.name}">${m.name}</option>`).join('')}
         </select>
-        <button onclick="inviteProjectMember('${p.id}')" style="padding:8px 16px;font-family:'Inter',sans-serif;font-size:13px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;white-space:nowrap;transition:opacity 150ms ease" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">招待</button>
+        <button onclick="inviteProjectMember('${p.id}')" style="padding:8px 16px;font-family:var(--font);font-size:13px;font-weight:500;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);cursor:pointer;white-space:nowrap;transition:opacity 150ms ease" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">招待</button>
       </div>
     </div>
     <div class="section" style="margin-top:24px"><div class="section-header">
@@ -1340,7 +1517,9 @@ async function unlinkProjectPage(pageId) {
 
 // ========== Pages (メモ) ==========
 async function loadPages() {
+  const viewAtStart = currentView;
   const { data } = await supabase.from('pages').select('*').order('updated_at', { ascending: false });
+  if (currentView !== viewAtStart) return; // ビューが変わっていたら中断
   pages = data || [];
   renderPageList();
   if (!pages.find(p => p.id === activePageId)) {
@@ -1967,7 +2146,8 @@ Object.assign(window, {
   pageExecCmd, pageInsertLink, pageSetBlock, onPageContentInput,
   showBulkPanel, addBulkTasks, handleFileUpload,
   toggleVoiceInput, stopVoice,
-  showAiPanel, saveAiKey, generateAiTasks, addAiSuggestions
+  showAiPanel, saveAiKey, generateAiTasks, addAiSuggestions,
+  setWlUser, wlPrev, wlNext, toggleWorklog
 });
 
 // ========== AI Chat Bot ==========
@@ -2310,19 +2490,27 @@ function setupRealtime() {
       if (currentView === 'pages') {
         const activePg = getActivePage();
         if (activePg && payload.new && payload.new.id === activePg.id) {
-          // 他ユーザーが同じメモを更新 → 内容を反映
+          // 他ユーザーが同じメモを更新 → タイトル・アイコン・内容をすべて反映
           Object.assign(activePg, payload.new);
+          // エディタ内でフォーカスがあるかチェック
           const ed = document.querySelector('.page-wysiwyg');
-          if (ed && ed.innerHTML !== activePg.content) {
-            // カーソル位置をできるだけ保持
-            const sel = window.getSelection();
-            const hadFocus = document.activeElement === ed;
-            ed.innerHTML = activePg.content || '';
-            if (hadFocus && sel.rangeCount) {
+          const titleInput = document.querySelector('.page-header-row .project-name-input');
+          const hasFocusOnContent = document.activeElement === ed;
+          const hasFocusOnTitle = document.activeElement === titleInput;
+          if (hasFocusOnContent) {
+            // コンテンツ編集中 → コンテンツのみ差分更新（タイトル等も更新）
+            if (ed && ed.innerHTML !== activePg.content) {
+              ed.innerHTML = activePg.content || '';
               try { ed.focus(); } catch(e) {}
             }
+            // タイトル・アイコンも個別に反映
+            if (titleInput && !hasFocusOnTitle) titleInput.value = activePg.title || '';
+            const iconBtn = document.querySelector('.page-icon-btn');
+            if (iconBtn) iconBtn.textContent = activePg.icon || '📄';
+          } else {
+            // フォーカスなし → エディタ全体を再描画
+            renderPageEditor();
           }
-          // タイトル等もサイドバーに反映
           renderPageList();
         } else {
           loadPages();

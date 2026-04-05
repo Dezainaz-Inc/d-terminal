@@ -3572,6 +3572,16 @@ function createSession(cwd, senderWebContentsId, cols, rows) {
     "-y",
     String(r)
   );
+  try {
+    tmuxExec(
+      "set-option",
+      "-t",
+      name,
+      "history-limit",
+      "200000"
+    );
+  } catch {
+  }
   tmuxExec(
     "set-environment",
     "-t",

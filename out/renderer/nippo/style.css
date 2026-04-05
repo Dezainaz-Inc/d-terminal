@@ -837,12 +837,162 @@ body {
 .page-wysiwyg pre {
   background: var(--hover-bg, rgba(0,0,0,0.04)); border-radius: var(--radius);
   padding: 12px 14px; overflow-x: auto; font-size: 13px; margin: 8px 0;
-  font-family: 'IBM Plex Mono', monospace;
+  font-family: var(--font-mono);
 }
 .page-wysiwyg code {
   background: var(--hover-bg, rgba(0,0,0,0.04)); padding: 2px 5px;
-  border-radius: 3px; font-size: 0.9em; font-family: 'IBM Plex Mono', monospace;
+  border-radius: 3px; font-size: 0.9em; font-family: var(--font-mono);
 }
 .page-wysiwyg p { margin: 6px 0; }
 .page-wysiwyg img { max-width: 100%; border-radius: 6px; margin: 8px 0; }
 .page-wysiwyg hr { border: none; border-top: 1px solid var(--border-light); margin: 16px 0; }
+
+/* ══════════════════════════════════════
+   Worklog Calendar — Nothing Style
+   ══════════════════════════════════════ */
+.wl-calendar {
+  margin-bottom: 28px;
+  animation: fadeUp 0.4s var(--ease) both;
+}
+.wl-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 20px;
+}
+.wl-title {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 2.5px; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.wl-nav {
+  display: flex; align-items: center; gap: 2px;
+}
+.wl-nav-btn {
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  background: none; border: 1px solid var(--border); border-radius: 50%;
+  color: var(--text-tertiary); cursor: pointer;
+  transition: all 0.2s var(--ease); font-size: 13px;
+}
+.wl-nav-btn:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.wl-month {
+  font-family: var(--font-mono); font-size: 13px; font-weight: 600;
+  color: var(--text-primary); min-width: 100px; text-align: center;
+  letter-spacing: 1px;
+}
+/* member selector */
+.wl-members {
+  display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;
+}
+.wl-member-chip {
+  font-family: var(--font); font-size: 11px; font-weight: 500;
+  padding: 4px 12px; border-radius: 20px;
+  background: none; border: 1px solid var(--border);
+  color: var(--text-tertiary); cursor: pointer;
+  transition: all 0.2s var(--ease);
+}
+.wl-member-chip:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.wl-member-chip.active {
+  background: var(--text-primary); color: var(--bg);
+  border-color: var(--text-primary);
+}
+/* grid */
+.wl-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr) auto;
+  gap: 0;
+}
+.wl-day-label {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 500;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--text-tertiary); text-align: center;
+  padding-bottom: 10px;
+}
+.wl-week-label {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 500;
+  letter-spacing: 1px; color: var(--text-tertiary);
+  padding-bottom: 10px; padding-left: 12px;
+}
+.wl-cell {
+  aspect-ratio: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px;
+  position: relative; cursor: default;
+  border-top: 1px solid var(--border-light);
+  transition: background 0.15s var(--ease);
+}
+.wl-cell:hover { background: var(--bg-hover); }
+.wl-cell.today { background: var(--bg-hover); }
+.wl-cell.empty { border-top-color: transparent; cursor: default; }
+.wl-cell.empty:hover { background: none; }
+.wl-date {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  color: var(--text-tertiary);
+}
+.wl-cell.today .wl-date { color: var(--accent-warm); font-weight: 700; }
+.wl-cell.has-hours .wl-date { color: var(--text-primary); }
+.wl-dot {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--border-light);
+  transition: all 0.3s var(--ease);
+  position: relative;
+}
+.wl-dot-fill {
+  position: absolute; bottom: 0; left: 0; right: 0;
+  background: var(--accent-warm);
+  border-radius: 50%;
+  transition: all 0.3s var(--ease);
+}
+.wl-hours {
+  font-family: var(--font-mono); font-size: 8px; font-weight: 600;
+  color: var(--text-tertiary); letter-spacing: 0.5px;
+}
+.wl-cell.has-hours .wl-hours { color: var(--text-secondary); }
+/* weekly total */
+.wl-week-total {
+  display: flex; align-items: center; justify-content: flex-end;
+  padding-left: 12px; border-top: 1px solid var(--border-light);
+  min-width: 52px;
+}
+.wl-week-total.empty-row { border-top-color: transparent; }
+.wl-wt-val {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  color: var(--text-tertiary); letter-spacing: 0.5px;
+}
+.wl-week-total.has-hours .wl-wt-val { color: var(--text-primary); }
+/* monthly summary */
+.wl-summary {
+  display: flex; gap: 24px; margin-top: 16px; padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.wl-stat {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.wl-stat-label {
+  font-family: var(--font-mono); font-size: 9px; font-weight: 500;
+  letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.wl-stat-val {
+  font-family: var(--font-mono); font-size: 20px; font-weight: 600;
+  color: var(--text-primary); letter-spacing: -0.5px;
+}
+.wl-stat-unit {
+  font-size: 11px; font-weight: 400; color: var(--text-tertiary);
+  margin-left: 2px;
+}
+/* toggle button */
+.wl-toggle {
+  display: flex; align-items: center; gap: 8px;
+  background: none; border: none; cursor: pointer;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--text-tertiary); padding: 12px 0; margin-bottom: 8px;
+  transition: color 0.2s var(--ease); width: 100%;
+}
+.wl-toggle:hover { color: var(--text-primary); }
+.wl-toggle-icon {
+  width: 16px; height: 16px; display: flex; align-items: center; justify-content: center;
+  transition: transform 0.3s var(--ease);
+}
+.wl-toggle-icon.open { transform: rotate(90deg); }
+.wl-toggle-line {
+  flex: 1; height: 1px; background: var(--border);
+}
