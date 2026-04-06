@@ -16,7 +16,7 @@ jobs:
           - runner: macos-latest
             arch: arm64
             brew_prefix: /opt/homebrew
-          - runner: macos-13
+          - runner: macos-15-large
             arch: x64
             brew_prefix: /usr/local
     runs-on: ${{ matrix.runner }}
