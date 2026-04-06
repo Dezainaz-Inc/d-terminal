@@ -9,17 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build-mac:
-    strategy:
-      matrix:
-        include:
-          - runner: macos-latest
-            arch: arm64
-            brew_prefix: /opt/homebrew
-          - runner: macos-15-large
-            arch: x64
-            brew_prefix: /usr/local
-    runs-on: ${{ matrix.runner }}
+  build-arm64:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -31,21 +22,75 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Rebuild native modules
-        run: npx @electron/rebuild --arch=${{ matrix.arch }}
+        run: npx @electron/rebuild
 
       - name: Prepare tmux for bundle
         run: |
           brew install tmux
 
           TMUX_BIN="$(which tmux)"
-          echo "tmux binary: $TMUX_BIN (arch: ${{ matrix.arch }})"
-          file "$TMUX_BIN"
+          echo "tmux binary: $TMUX_BIN"
           cp "$TMUX_BIN" resources/tmux
           chmod +x resources/tmux
 
           # Copy dynamic library dependencies from brew
           mkdir -p resources/lib
-          otool -L "$TMUX_BIN" | tail -n +2 | awk '{print $1}' | grep '${{ matrix.brew_prefix }}' | while read -r lib; do
+          otool -L "$TMUX_BIN" | tail -n +2 | awk '{print $1}' | grep '/opt/homebrew\|/usr/local' | while read -r lib; do
+            echo "Copying lib: $lib"
+            cp "$lib" resources/lib/
+            libname="$(basename "$lib")"
+            install_name_tool -change "$lib" "@loader_path/lib/$libname" resources/tmux
+          done
+
+          # Generate terminfo
+          mkdir -p resources/terminfo/78
+          infocmp -x xterm-256color > /tmp/xterm-256color.ti
+          tic -o resources/terminfo /tmp/xterm-256color.ti
+
+          # Verify
+          echo "=== tmux dependencies ==="
+          otool -L resources/tmux
+          echo "=== lib contents ==="
+          ls -la resources/lib/
+
+      - name: Build & Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --arm64 --publish always
+
+  build-x64:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rosetta
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Rebuild native modules for x64
+        run: npx @electron/rebuild --arch=x64
+
+      - name: Prepare tmux (x64 via Rosetta)
+        run: |
+          # Install x86_64 Homebrew and tmux via Rosetta
+          arch -x86_64 /bin/bash -c 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' || true
+          arch -x86_64 /usr/local/bin/brew install tmux
+
+          TMUX_BIN="/usr/local/bin/tmux"
+          echo "tmux binary: $TMUX_BIN"
+          file "$TMUX_BIN"
+          cp "$TMUX_BIN" resources/tmux
+          chmod +x resources/tmux
+
+          # Copy dynamic library dependencies
+          mkdir -p resources/lib
+          otool -L "$TMUX_BIN" | tail -n +2 | awk '{print $1}' | grep '/usr/local' | while read -r lib; do
             echo "Copying lib: $lib"
             cp "$lib" resources/lib/
             libname="$(basename "$lib")"
@@ -54,7 +99,7 @@ jobs:
 
           # Fix lib interdependencies
           for libfile in resources/lib/*.dylib; do
-            otool -L "$libfile" | tail -n +2 | awk '{print $1}' | grep '${{ matrix.brew_prefix }}' | while read -r dep; do
+            otool -L "$libfile" | tail -n +2 | awk '{print $1}' | grep '/usr/local' | while read -r dep; do
               depname="$(basename "$dep")"
               if [ -f "resources/lib/$depname" ]; then
                 install_name_tool -change "$dep" "@loader_path/$depname" "$libfile"
@@ -79,4 +124,4 @@ jobs:
       - name: Build & Publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac --${{ matrix.arch }} --publish always
+        run: npx electron-builder --mac --x64 --publish always
