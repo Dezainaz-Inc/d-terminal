@@ -3556,54 +3556,46 @@ function attachClient(sessionId, cols, rows, senderWebContentsId) {
 function createSession(cwd, senderWebContentsId, cols, rows) {
   const sessionId = crypto$1.randomBytes(8).toString("hex");
   const shell2 = process.env.SHELL || "/bin/zsh";
-  const name = tmuxSessionName(sessionId);
   const resolvedCwd = cwd || os.homedir();
   const c = cols || 80;
   const r = rows || 24;
-  tmuxExec(
-    "new-session",
-    "-d",
-    "-s",
-    name,
-    "-c",
-    resolvedCwd,
-    "-x",
-    String(c),
-    "-y",
-    String(r)
+  // tmuxを介さず直接シェルを起動（出力が圧縮されないように）
+  const ptyProcess = pty.spawn(
+    shell2,
+    [],
+    { name: "xterm-256color", cols: c, rows: r, cwd: resolvedCwd, env: utf8Env() }
   );
-  try {
-    tmuxExec(
-      "set-option",
-      "-t",
-      name,
-      "history-limit",
-      "200000"
-    );
-  } catch {
-  }
-  tmuxExec(
-    "set-environment",
-    "-t",
-    name,
-    "COLLAB_PTY_SESSION_ID",
-    sessionId
+  const disposables = [];
+  disposables.push(
+    ptyProcess.onData((data) => {
+      sendToSender(
+        senderWebContentsId,
+        "pty:data",
+        { sessionId, data }
+      );
+    })
   );
-  tmuxExec(
-    "set-environment",
-    "-t",
-    name,
-    "SHELL",
-    shell2
+  disposables.push(
+    ptyProcess.onExit(({ exitCode }) => {
+      sessions.delete(sessionId);
+      deleteSessionMeta(sessionId);
+      sendToSender(
+        senderWebContentsId,
+        "pty:exit",
+        { sessionId, exitCode: exitCode || 0 }
+      );
+    })
   );
+  sessions.set(sessionId, {
+    pty: ptyProcess,
+    shell: shell2,
+    disposables
+  });
   writeSessionMeta(sessionId, {
     shell: shell2,
     cwd: resolvedCwd,
     createdAt: (/* @__PURE__ */ new Date()).toISOString()
   });
-  attachClient(sessionId, c, r, senderWebContentsId);
-  const session2 = sessions.get(sessionId);
-  session2.shell = shell2;
   return { sessionId, shell: shell2 };
 }
 function stripTrailingBlanks(text) {
@@ -3615,44 +3607,9 @@ function stripTrailingBlanks(text) {
   return lines.slice(0, end).join("\n");
 }
 function reconnectSession(sessionId, cols, rows, senderWebContentsId) {
-  const name = tmuxSessionName(sessionId);
-  try {
-    tmuxExec("has-session", "-t", name);
-  } catch {
-    deleteSessionMeta(sessionId);
-    throw new Error(`tmux session ${name} not found`);
-  }
-  let scrollback = "";
-  try {
-    const raw = tmuxExec(
-      "capture-pane",
-      "-t",
-      name,
-      "-p",
-      "-e",
-      "-S",
-      "-200000"
-    );
-    scrollback = stripTrailingBlanks(raw);
-  } catch {
-  }
-  attachClient(sessionId, cols, rows, senderWebContentsId);
-  try {
-    tmuxExec(
-      "resize-window",
-      "-t",
-      name,
-      "-x",
-      String(cols),
-      "-y",
-      String(rows)
-    );
-  } catch {
-  }
-  const meta = readSessionMeta(sessionId);
-  const session2 = sessions.get(sessionId);
-  session2.shell = meta?.shell || process.env.SHELL || "/bin/zsh";
-  return { sessionId, shell: session2.shell, meta, scrollback };
+  // tmuxなしモード: 再接続はサポートしない（新規セッション作成にフォールバック）
+  deleteSessionMeta(sessionId);
+  throw new Error(`Session ${sessionId} not found (no tmux persistence)`);
 }
 function writeToSession(sessionId, data) {
   const session2 = sessions.get(sessionId);
@@ -3660,26 +3617,15 @@ function writeToSession(sessionId, data) {
   session2.pty.write(data);
 }
 function sendRawKeys(sessionId, data) {
-  const name = tmuxSessionName(sessionId);
-  tmuxExec("send-keys", "-l", "-t", name, data);
+  // tmuxなしモード: 直接ptyに書き込む
+  const session2 = sessions.get(sessionId);
+  if (!session2) return;
+  session2.pty.write(data);
 }
 function resizeSession(sessionId, cols, rows) {
   const session2 = sessions.get(sessionId);
   if (!session2) return;
   session2.pty.resize(cols, rows);
-  const name = tmuxSessionName(sessionId);
-  try {
-    tmuxExec(
-      "resize-window",
-      "-t",
-      name,
-      "-x",
-      String(cols),
-      "-y",
-      String(rows)
-    );
-  } catch {
-  }
 }
 function killSession(sessionId) {
   const session2 = sessions.get(sessionId);
@@ -3688,29 +3634,15 @@ function killSession(sessionId) {
     session2.pty.kill();
     sessions.delete(sessionId);
   }
-  const name = tmuxSessionName(sessionId);
-  try {
-    tmuxExec("kill-session", "-t", name);
-  } catch {
-  }
   deleteSessionMeta(sessionId);
 }
 const KILL_ALL_TIMEOUT_MS = 2e3;
 function ensureTmuxServerAlive() {
-  // tmuxサーバーを維持するためのキープアライブセッション
-  try {
-    tmuxExec("has-session", "-t", "keepalive");
-  } catch {
-    try {
-      tmuxExec("new-session", "-d", "-s", "keepalive", "-x", "1", "-y", "1");
-    } catch {}
-  }
+  // no-op: tmuxなしモード
 }
 
 function killAllAndWait() {
   shuttingDown$1 = true;
-  // tmuxサーバーを維持（次回起動時にreconnectできるように）
-  ensureTmuxServerAlive();
   if (sessions.size === 0) return Promise.resolve();
   const pending2 = [];
   for (const [id, session2] of sessions) {
@@ -3720,10 +3652,9 @@ function killAllAndWait() {
       })
     );
     for (const d of session2.disposables) d.dispose();
-    // tmuxセッションは殺さずdetachのみ（次回再接続できるように）
     session2.pty.kill();
     sessions.delete(id);
-    // メタデータは残す（再接続用）
+    deleteSessionMeta(id);
   }
   const timeout = new Promise(
     (resolve2) => setTimeout(resolve2, KILL_ALL_TIMEOUT_MS)
@@ -3735,21 +3666,7 @@ function killAllAndWait() {
   ]);
 }
 function discoverSessions() {
-  // tmuxサーバーを確実に起動
-  ensureTmuxServerAlive();
-  let tmuxNames;
-  try {
-    const raw = tmuxExec(
-      "list-sessions",
-      "-F",
-      "#{session_name}"
-    );
-    tmuxNames = raw.split("\n").filter(Boolean).filter(n => n !== 'keepalive');
-  } catch {
-    tmuxNames = [];
-  }
-  const tmuxSet = new Set(tmuxNames);
-  const result = [];
+  // tmuxなしモード: 永続セッションはないのでメタデータをクリーンアップ
   let metaFiles;
   try {
     metaFiles = fs.readdirSync(SESSION_DIR).filter((f) => f.endsWith(".json"));
@@ -3758,29 +3675,14 @@ function discoverSessions() {
   }
   for (const file of metaFiles) {
     const sessionId = file.replace(".json", "");
-    const name = tmuxSessionName(sessionId);
-    if (tmuxSet.has(name)) {
-      const meta = readSessionMeta(sessionId);
-      if (meta) {
-        result.push({ sessionId, meta });
-      }
-      tmuxSet.delete(name);
-    } else {
+    if (!sessions.has(sessionId)) {
       deleteSessionMeta(sessionId);
     }
   }
-  for (const orphan of tmuxSet) {
-    if (orphan.startsWith("collab-")) {
-      try {
-        tmuxExec("kill-session", "-t", orphan);
-      } catch {
-      }
-    }
-  }
-  return result;
+  return [];
 }
 function verifyTmuxAvailable() {
-  tmuxExec("-V");
+  // no-op: tmuxなしモード
 }
 const { autoUpdater } = electronUpdater;
 const ERROR_RESET_DELAY_MS = 3e4;

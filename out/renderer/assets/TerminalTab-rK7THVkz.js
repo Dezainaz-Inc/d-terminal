@@ -12205,9 +12205,8 @@ function TerminalTab({ sessionId, visible, restored, scrollbackData }) {
       if (!chunk) return;
       if (firstData) {
         firstData = false;
-        if (restored) {
-          term.write("\x1B[2J\x1B[H");
-        } else {
+        // 直接ptyモード: "Starting..."テキストをクリアするだけ
+        if (!restored) {
           term.reset();
         }
       }

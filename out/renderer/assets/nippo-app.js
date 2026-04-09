@@ -54,6 +54,7 @@ let notifTriggers = [];
 let settingsTab = 'members';
 let pages = [];
 let activePageId = null;
+let collapsedGroups = JSON.parse(localStorage.getItem('dezainaz_collapsed_groups') || '[]');
 
 let sidebarQuery = '';
 
@@ -671,7 +672,7 @@ async function autoPopulateTodos() {
   const yesterday = reports.find(rep => rep.date < r.date);
   if (yesterday) {
     yesterday.todos.filter(t => !t.done).forEach(t => {
-      if (!seen.has(t.text)) { newTodos.push({ text: t.text, done: false }); seen.add(t.text); }
+      if (!seen.has(t.text)) { newTodos.push({ text: t.text, done: false, projectTaskId: t.projectTaskId || null }); seen.add(t.text); }
     });
   }
 
@@ -683,14 +684,14 @@ async function autoPopulateTodos() {
     if (projs && projs.length) {
       const projMap = {}; projs.forEach(p => projMap[p.id] = p.name);
       const { data: tasks } = await supabase.from('project_tasks')
-        .select('title,project_id,assignee,due_date,status')
+        .select('id,title,project_id,assignee,due_date,status')
         .in('project_id', projs.map(p=>p.id)).neq('status','done');
       if (tasks) {
         const todayDate = r.date;
         tasks.filter(t => t.assignee === currentUser || t.status === 'in_progress' || t.due_date === todayDate)
           .forEach(t => {
             const text = `[${projMap[t.project_id]}] ${t.title}`;
-            if (!seen.has(text)) { newTodos.push({ text, done: false }); seen.add(text); }
+            if (!seen.has(text)) { newTodos.push({ text, done: false, projectTaskId: t.id }); seen.add(text); }
           });
       }
     }
@@ -824,6 +825,15 @@ function toggleTask(key,idx) {
   const r = getActive(); if (!r) return;
   r[key][idx].done = !r[key][idx].done; saveToDb();
   renderTasks(key, key==='todos'?'todoList':'doneList'); renderReportList();
+  // プロジェクトタスクも連動
+  const task = r[key][idx];
+  if (task.projectTaskId) {
+    const newStatus = task.done ? 'done' : 'todo';
+    const updates = { status: newStatus, updated_at: new Date().toISOString() };
+    if (task.done) { updates.completed_by = currentUser; updates.completed_at = new Date().toISOString(); }
+    else { updates.completed_by = null; updates.completed_at = null; }
+    supabase.from('project_tasks').update(updates).eq('id', task.projectTaskId).then();
+  }
 }
 function updateTaskText(key,idx,val) { const r = getActive(); if (!r) return; r[key][idx].text = val; saveToDb(); }
 function removeTask(key,idx) {
@@ -845,11 +855,11 @@ async function importProjectTasks() {
   if (!myIds.length) { alert('参加中のプロジェクトがありません'); return; }
   const { data: projs } = await supabase.from('projects').select('id,name').in('id', myIds).eq('status','active');
   if (!projs || !projs.length) { alert('進行中のプロジェクトがありません'); return; }
-  const { data: tasks } = await supabase.from('project_tasks').select('title,status,project_id').in('project_id', projs.map(p=>p.id)).neq('status','done');
+  const { data: tasks } = await supabase.from('project_tasks').select('id,title,status,project_id').in('project_id', projs.map(p=>p.id)).neq('status','done');
   if (!tasks || !tasks.length) { alert('未完了のタスクがありません'); return; }
   const projMap = {}; projs.forEach(p => projMap[p.id] = p.name);
   const existingTexts = r.todos.map(t => t.text);
-  const items = tasks.map(t => ({ text: `[${projMap[t.project_id]}] ${t.title}`, proj: projMap[t.project_id] })).filter(t => !existingTexts.includes(t.text));
+  const items = tasks.map(t => ({ text: `[${projMap[t.project_id]}] ${t.title}`, proj: projMap[t.project_id], projectTaskId: t.id })).filter(t => !existingTexts.includes(t.text));
   if (!items.length) { alert('追加できるタスクがありません（すべて追加済み）'); return; }
   // Show picker dialog
   const overlay = document.createElement('div');
@@ -869,7 +879,7 @@ async function importProjectTasks() {
   dialog.querySelector('#importCancel').onclick = () => overlay.remove();
   dialog.querySelector('#importConfirm').onclick = () => {
     const checked = dialog.querySelectorAll('#importTaskList input:checked');
-    checked.forEach(cb => { r.todos.push({ text: items[cb.value].text, done: false }); });
+    checked.forEach(cb => { const it = items[cb.value]; r.todos.push({ text: it.text, done: false, projectTaskId: it.projectTaskId || null }); });
     saveToDb(); renderTasks('todos','todoList'); overlay.remove();
   };
 }
@@ -1528,9 +1538,11 @@ async function loadPages() {
   }
 }
 
-async function createNewPage() {
+async function createNewPage(groupName) {
+  const insertData = { title: '', content: '', created_by: currentUser };
+  if (groupName) insertData.group_name = groupName;
   const { data, error } = await supabase.from('pages')
-    .insert({ title: '', content: '', created_by: currentUser }).select().single();
+    .insert(insertData).select().single();
   if (error) { alert('エラー: ' + error.message); return; }
   pages.unshift(data);
   renderPageList();
@@ -1540,6 +1552,49 @@ async function createNewPage() {
     const ti = document.querySelector('.project-name-input');
     if (ti) ti.focus();
   }, 100);
+}
+
+function togglePageGroup(gn) {
+  const idx = collapsedGroups.indexOf(gn);
+  if (idx >= 0) collapsedGroups.splice(idx, 1);
+  else collapsedGroups.push(gn);
+  localStorage.setItem('dezainaz_collapsed_groups', JSON.stringify(collapsedGroups));
+  renderPageList();
+}
+
+async function createPageGroup() {
+  const name = prompt('グループ名を入力:');
+  if (!name || !name.trim()) return;
+  createNewPage(name.trim());
+}
+
+async function renamePageGroup(oldName) {
+  const newName = prompt('新しいグループ名:', oldName);
+  if (!newName || !newName.trim() || newName.trim() === oldName) return;
+  const target = pages.filter(p => p.group_name === oldName);
+  for (const p of target) {
+    p.group_name = newName.trim();
+    await supabase.from('pages').update({ group_name: newName.trim(), updated_at: new Date().toISOString() }).eq('id', p.id);
+  }
+  // collapsed状態も引き継ぐ
+  const idx = collapsedGroups.indexOf(oldName);
+  if (idx >= 0) collapsedGroups[idx] = newName.trim();
+  localStorage.setItem('dezainaz_collapsed_groups', JSON.stringify(collapsedGroups));
+  renderPageList();
+}
+
+function changePageGroup(val) {
+  const p = getActivePage(); if (!p) return;
+  if (val === '__new__') {
+    const name = prompt('新しいグループ名:');
+    if (!name || !name.trim()) { renderPageEditor(); return; }
+    p.group_name = name.trim();
+  } else {
+    p.group_name = val || null;
+  }
+  savePageToDb();
+  renderPageList();
+  renderPageEditor();
 }
 
 function selectPage(id) {
@@ -1564,15 +1619,69 @@ async function deletePage(id) {
 function getActivePage() { return pages.find(p => p.id === activePageId); }
 
 function renderPageList() {
-  const filtered = sidebarQuery ? pages.filter(p => (p.title||'').toLowerCase().includes(sidebarQuery.toLowerCase())) : pages;
-  document.getElementById('sidebarList').innerHTML = filtered.map(p => {
-    const active = p.id === activePageId;
-    const preview = p.title || '無題';
-    return `<div class="report-item${active ? ' active' : ''}" onclick="selectPage('${p.id}')">
-      <div class="report-item-date">${p.icon || '📄'} ${preview}</div>
-      <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
+  const filtered = sidebarQuery ? pages.filter(p => (p.title||'').toLowerCase().includes(sidebarQuery.toLowerCase()) || (p.group_name||'').toLowerCase().includes(sidebarQuery.toLowerCase())) : pages;
+  // グループ別に分類
+  const grouped = {};
+  const ungrouped = [];
+  filtered.forEach(p => {
+    if (p.group_name) {
+      if (!grouped[p.group_name]) grouped[p.group_name] = [];
+      grouped[p.group_name].push(p);
+    } else {
+      ungrouped.push(p);
+    }
+  });
+  const groupNames = Object.keys(grouped).sort((a,b) => a.localeCompare(b,'ja'));
+  let html = '';
+  // グループ
+  groupNames.forEach(gn => {
+    const isCollapsed = collapsedGroups.includes(gn);
+    html += `<div class="page-group-header${isCollapsed?' collapsed':''}" onclick="togglePageGroup('${gn.replace(/'/g,"\\'")}')">
+      <svg class="page-group-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      <span class="page-group-name">${gn}</span>
+      <span class="page-group-count">${grouped[gn].length}</span>
+      <button class="page-group-add" onclick="event.stopPropagation();createNewPage('${gn.replace(/'/g,"\\'")}')" title="このグループにメモを追加">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      </button>
     </div>`;
-  }).join('');
+    if (!isCollapsed) {
+      grouped[gn].forEach(p => {
+        const active = p.id === activePageId;
+        html += `<div class="report-item page-group-child${active?' active':''}" onclick="selectPage('${p.id}')">
+          <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
+          <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
+        </div>`;
+      });
+    }
+  });
+  // 未分類
+  if (ungrouped.length && groupNames.length) {
+    const isCollapsed = collapsedGroups.includes('__ungrouped__');
+    html += `<div class="page-group-header ungrouped${isCollapsed?' collapsed':''}" onclick="togglePageGroup('__ungrouped__')">
+      <svg class="page-group-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      <span class="page-group-name">未分類</span>
+      <span class="page-group-count">${ungrouped.length}</span>
+    </div>`;
+    if (!isCollapsed) {
+      ungrouped.forEach(p => {
+        const active = p.id === activePageId;
+        html += `<div class="report-item page-group-child${active?' active':''}" onclick="selectPage('${p.id}')">
+          <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
+          <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
+        </div>`;
+      });
+    }
+  } else {
+    // グループがない場合はフラット表示
+    ungrouped.forEach(p => {
+      const active = p.id === activePageId;
+      html += `<div class="report-item${active?' active':''}" onclick="selectPage('${p.id}')">
+        <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
+        <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
+      </div>`;
+    });
+  }
+  document.getElementById('sidebarList').innerHTML = html;
 }
 
 function savePageToDb() {
@@ -1582,6 +1691,7 @@ function savePageToDb() {
     markSelfChange();
     await supabase.from('pages').update({
       title: p.title, content: p.content, icon: p.icon,
+      group_name: p.group_name || null,
       project_id: p.project_id || null, updated_at: new Date().toISOString()
     }).eq('id', p.id);
     renderPageList();
@@ -1622,6 +1732,12 @@ function renderPageEditor() {
   let projectOpts = '<option value="">プロジェクトに紐付けない</option>';
   projects.forEach(pj => { projectOpts += `<option value="${pj.id}"${p.project_id===pj.id?' selected':''}>${pj.name}</option>`; });
 
+  // グループ選択肢
+  const existingGroups = [...new Set(pages.map(pg => pg.group_name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ja'));
+  let groupOpts = '<option value="">グループなし</option>';
+  existingGroups.forEach(g => { groupOpts += `<option value="${g}"${p.group_name===g?' selected':''}>${g}</option>`; });
+  groupOpts += '<option value="__new__">+ 新しいグループ...</option>';
+
   const contentHtml = plainToHtml(p.content);
 
   pe.innerHTML = `
@@ -1630,10 +1746,17 @@ function renderPageEditor() {
       <input class="project-name-input" value="${p.title || ''}" placeholder="無題"
         oninput="updatePageField('title',this.value)">
     </div>
-    <div class="page-project-link">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-      <select style="font-size:12px;border:none;outline:none;color:var(--text-tertiary);background:none;cursor:pointer"
-        onchange="updatePageField('project_id',this.value||null)">${projectOpts}</select>
+    <div class="page-meta-row">
+      <div class="page-project-link">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <select style="font-size:12px;border:none;outline:none;color:var(--text-tertiary);background:none;cursor:pointer"
+          onchange="updatePageField('project_id',this.value||null)">${projectOpts}</select>
+      </div>
+      <div class="page-project-link">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+        <select style="font-size:12px;border:none;outline:none;color:var(--text-tertiary);background:none;cursor:pointer"
+          onchange="changePageGroup(this.value)">${groupOpts}</select>
+      </div>
     </div>
     <div class="page-toolbar">
       <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h1')" title="見出し1">H1</button>
@@ -2141,7 +2264,7 @@ Object.assign(window, {
   inviteProjectMember, removeProjectMember,
   addMilestone, updateMilestone, toggleMilestone, deleteMilestone, editMilestone,
   addProjectPage, openProjectPage, unlinkProjectPage, linkExistingPage,
-  loadPages, createNewPage, selectPage, deletePage,
+  loadPages, createNewPage, selectPage, deletePage, togglePageGroup, createPageGroup, renamePageGroup, changePageGroup,
   updatePageField, cyclePageIcon,
   pageExecCmd, pageInsertLink, pageSetBlock, onPageContentInput,
   showBulkPanel, addBulkTasks, handleFileUpload,
