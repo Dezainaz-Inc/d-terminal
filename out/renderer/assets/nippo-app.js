@@ -55,6 +55,7 @@ let settingsTab = 'members';
 let pages = [];
 let activePageId = null;
 let collapsedGroups = JSON.parse(localStorage.getItem('dezainaz_collapsed_groups') || '[]');
+let expandedPageIds = JSON.parse(localStorage.getItem('dezainaz_expanded_pages') || '[]');
 
 let sidebarQuery = '';
 
@@ -1032,7 +1033,8 @@ function saveProjectToDb() {
     await supabase.from('projects').update({
       name:p.name, description:p.description, status:p.status,
       priority:p.priority, start_date:p.start_date||null,
-      due_date:p.due_date||null, updated_at:new Date().toISOString()
+      due_date:p.due_date||null, default_assignee:p.default_assignee||null,
+      updated_at:new Date().toISOString()
     }).eq('id',p.id);
     renderProjectList();
   },400);
@@ -1083,6 +1085,11 @@ function renderProjectEditor() {
         <input type="date" value="${p.start_date||''}" onchange="updateProjectField('start_date',this.value)"></div>
       <div class="meta-field"><div class="meta-field-label">期限${p.due_date ? (() => { const diff = Math.ceil((new Date(p.due_date+'T00:00:00') - new Date(todayStr()+'T00:00:00')) / 86400000); return diff < 0 ? ' <span style="color:#e53e3e;font-weight:600">（期限超過）</span>' : diff === 0 ? ' <span style="color:#e53e3e;font-weight:600">（今日）</span>' : diff <= 7 ? ` <span style="color:var(--accent-warm);font-weight:500">（残${diff}日）</span>` : ''; })() : ''}</div>
         <input type="date" value="${p.due_date||''}" onchange="updateProjectField('due_date',this.value)"></div>
+      <div class="meta-field"><div class="meta-field-label">デフォルト担当</div>
+        <select onchange="updateProjectField('default_assignee',this.value)">
+          <option value="">なし</option>
+          ${teamMembers.map(m=>`<option value="${m.name}"${p.default_assignee===m.name?' selected':''}>${m.name}</option>`).join('')}
+        </select></div>
     </div>
     <div class="progress-section"><div class="progress-header">
       <span class="progress-label">進捗 — ${done} 完了 / ${inProg} 進行中 / ${total} タスク</span>
@@ -1122,7 +1129,6 @@ function renderProjectEditor() {
         </select>
       </div>
       <div id="bulkPanel"></div>
-      <div id="aiPanel"></div>
       <div id="projectTaskList"></div>
       <button class="btn-add-task" onclick="addProjectTask()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>タスクを追加</button></div>
     <div class="section" style="margin-top:24px"><div class="section-header">
@@ -1597,18 +1603,70 @@ function changePageGroup(val) {
   renderPageEditor();
 }
 
+function togglePageTree(id) {
+  const idx = expandedPageIds.indexOf(id);
+  if (idx >= 0) expandedPageIds.splice(idx, 1);
+  else expandedPageIds.push(id);
+  localStorage.setItem('dezainaz_expanded_pages', JSON.stringify(expandedPageIds));
+  renderPageList();
+}
+
+async function createSubpage(parentId) {
+  const parent = pages.find(p => p.id === parentId);
+  const insertData = { title: '', content: '', created_by: currentUser, parent_id: parentId };
+  if (parent && parent.group_name) insertData.group_name = parent.group_name;
+  const { data, error } = await supabase.from('pages').insert(insertData).select().single();
+  if (error) { alert('エラー: ' + error.message); return; }
+  pages.unshift(data);
+  // 親を展開
+  if (!expandedPageIds.includes(parentId)) {
+    expandedPageIds.push(parentId);
+    localStorage.setItem('dezainaz_expanded_pages', JSON.stringify(expandedPageIds));
+  }
+  renderPageList();
+  selectPage(data.id);
+  setTimeout(() => { const ti = document.querySelector('.project-name-input'); if (ti) ti.focus(); }, 100);
+}
+
+function getPageBreadcrumbs(pageId) {
+  const crumbs = [];
+  let current = pages.find(p => p.id === pageId);
+  while (current) {
+    crumbs.unshift(current);
+    current = current.parent_id ? pages.find(p => p.id === current.parent_id) : null;
+  }
+  return crumbs;
+}
+
 function selectPage(id) {
   activePageId = id;
+  // 親ツリーを自動展開
+  let pg = pages.find(p => p.id === id);
+  while (pg && pg.parent_id) {
+    if (!expandedPageIds.includes(pg.parent_id)) expandedPageIds.push(pg.parent_id);
+    pg = pages.find(p => p.id === pg.parent_id);
+  }
+  localStorage.setItem('dezainaz_expanded_pages', JSON.stringify(expandedPageIds));
   renderPageList();
   renderPageEditor();
   closeSidebarMobile();
 }
 
 async function deletePage(id) {
-  if (!confirm('このメモを削除しますか？')) return;
+  const children = pages.filter(p => p.parent_id === id);
+  const msg = children.length > 0
+    ? `このメモとサブページ${children.length}件を削除しますか？`
+    : 'このメモを削除しますか？';
+  if (!confirm(msg)) return;
+  // 子ページのparent_idをnullに（DBのON DELETE SET NULLと同期）
+  // もしくは一緒に削除
+  for (const c of children) {
+    await supabase.from('pages').delete().eq('id', c.id);
+  }
   await supabase.from('pages').delete().eq('id', id);
-  pages = pages.filter(p => p.id !== id);
-  if (activePageId === id) {
+  const deletedIds = new Set([id, ...children.map(c => c.id)]);
+  pages = pages.filter(p => !deletedIds.has(p.id));
+  if (deletedIds.has(activePageId)) {
     activePageId = null;
     document.getElementById('pageEditor').style.display = 'none';
     document.getElementById('emptyState').style.display = 'flex';
@@ -1619,11 +1677,24 @@ async function deletePage(id) {
 function getActivePage() { return pages.find(p => p.id === activePageId); }
 
 function renderPageList() {
-  const filtered = sidebarQuery ? pages.filter(p => (p.title||'').toLowerCase().includes(sidebarQuery.toLowerCase()) || (p.group_name||'').toLowerCase().includes(sidebarQuery.toLowerCase())) : pages;
-  // グループ別に分類
+  const q = sidebarQuery.toLowerCase();
+  const filtered = q ? pages.filter(p => (p.title||'').toLowerCase().includes(q) || (p.group_name||'').toLowerCase().includes(q)) : pages;
+  // 検索中はフラット表示
+  if (q) {
+    document.getElementById('sidebarList').innerHTML = filtered.map(p => {
+      const active = p.id === activePageId;
+      return `<div class="report-item${active?' active':''}" onclick="selectPage('${p.id}')">
+        <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
+        <div class="report-item-sub">${p.group_name ? p.group_name+' · ' : ''}${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
+      </div>`;
+    }).join('');
+    return;
+  }
+  // ルートページ(parent_idなし)をグループ分類
+  const roots = filtered.filter(p => !p.parent_id);
   const grouped = {};
   const ungrouped = [];
-  filtered.forEach(p => {
+  roots.forEach(p => {
     if (p.group_name) {
       if (!grouped[p.group_name]) grouped[p.group_name] = [];
       grouped[p.group_name].push(p);
@@ -1632,6 +1703,33 @@ function renderPageList() {
     }
   });
   const groupNames = Object.keys(grouped).sort((a,b) => a.localeCompare(b,'ja'));
+
+  function renderPageTree(pg, depth) {
+    const active = pg.id === activePageId;
+    const children = pages.filter(c => c.parent_id === pg.id);
+    const hasChildren = children.length > 0;
+    const isExpanded = expandedPageIds.includes(pg.id);
+    const pad = 12 + depth * 16;
+    let h = `<div class="report-item page-tree-item${active?' active':''}" style="padding-left:${pad}px" onclick="selectPage('${pg.id}')">`;
+    if (hasChildren) {
+      h += `<button class="page-tree-toggle${isExpanded?' open':''}" onclick="event.stopPropagation();togglePageTree('${pg.id}')">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>`;
+    } else {
+      h += `<span class="page-tree-spacer"></span>`;
+    }
+    h += `<span class="page-tree-label">${pg.icon||'📄'} ${pg.title||'無題'}</span>`;
+    h += `<button class="page-tree-add" onclick="event.stopPropagation();createSubpage('${pg.id}')" title="サブページを追加">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+    </button>`;
+    h += `</div>`;
+    if (hasChildren && isExpanded) {
+      children.sort((a,b) => new Date(b.updated_at) - new Date(a.updated_at));
+      children.forEach(c => { h += renderPageTree(c, depth + 1); });
+    }
+    return h;
+  }
+
   let html = '';
   // グループ
   groupNames.forEach(gn => {
@@ -1645,13 +1743,7 @@ function renderPageList() {
       </button>
     </div>`;
     if (!isCollapsed) {
-      grouped[gn].forEach(p => {
-        const active = p.id === activePageId;
-        html += `<div class="report-item page-group-child${active?' active':''}" onclick="selectPage('${p.id}')">
-          <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
-          <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
-        </div>`;
-      });
+      grouped[gn].forEach(p => { html += renderPageTree(p, 0); });
     }
   });
   // 未分類
@@ -1663,23 +1755,10 @@ function renderPageList() {
       <span class="page-group-count">${ungrouped.length}</span>
     </div>`;
     if (!isCollapsed) {
-      ungrouped.forEach(p => {
-        const active = p.id === activePageId;
-        html += `<div class="report-item page-group-child${active?' active':''}" onclick="selectPage('${p.id}')">
-          <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
-          <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
-        </div>`;
-      });
+      ungrouped.forEach(p => { html += renderPageTree(p, 0); });
     }
-  } else {
-    // グループがない場合はフラット表示
-    ungrouped.forEach(p => {
-      const active = p.id === activePageId;
-      html += `<div class="report-item${active?' active':''}" onclick="selectPage('${p.id}')">
-        <div class="report-item-date">${p.icon||'📄'} ${p.title||'無題'}</div>
-        <div class="report-item-sub">${new Date(p.updated_at).toLocaleDateString('ja-JP')}</div>
-      </div>`;
-    });
+  } else if (!groupNames.length) {
+    ungrouped.forEach(p => { html += renderPageTree(p, 0); });
   }
   document.getElementById('sidebarList').innerHTML = html;
 }
@@ -1691,11 +1770,93 @@ function savePageToDb() {
     markSelfChange();
     await supabase.from('pages').update({
       title: p.title, content: p.content, icon: p.icon,
-      group_name: p.group_name || null,
-      project_id: p.project_id || null, updated_at: new Date().toISOString()
+      group_name: p.group_name || null, parent_id: p.parent_id || null,
+      project_id: p.project_id || null,
+      view_type: p.view_type || 'gallery',
+      property_schema: p.property_schema || [],
+      properties: p.properties || {},
+      updated_at: new Date().toISOString()
     }).eq('id', p.id);
     renderPageList();
   }, 500);
+}
+
+// ========== DB機能 ==========
+function setPageViewType(vt) {
+  const p = getActivePage(); if (!p) return;
+  p.view_type = vt;
+  savePageToDb();
+  renderPageEditor();
+}
+
+function addPageProperty() {
+  const p = getActivePage(); if (!p) return;
+  const schema = p.property_schema || [];
+  const types = [
+    { value: 'text', label: 'テキスト' },
+    { value: 'select', label: 'セレクト' },
+    { value: 'date', label: '日付' },
+    { value: 'checkbox', label: 'チェックボックス' }
+  ];
+  // ダイアログ
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center';
+  const dialog = document.createElement('div');
+  dialog.style.cssText = 'background:var(--bg-primary,var(--bg));border-radius:12px;padding:24px;max-width:360px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.2);font-family:var(--font)';
+  dialog.innerHTML = `
+    <div style="font-size:15px;font-weight:600;margin-bottom:16px;color:var(--text-primary)">プロパティを追加</div>
+    <input id="propName" placeholder="プロパティ名" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);margin-bottom:10px;outline:none;background:var(--bg);color:var(--text-primary)">
+    <select id="propType" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);margin-bottom:10px;background:var(--bg);color:var(--text-primary)">
+      ${types.map(t => `<option value="${t.value}">${t.label}</option>`).join('')}
+    </select>
+    <div id="propOptionsWrap" style="display:none;margin-bottom:10px">
+      <input id="propOptions" placeholder="選択肢（カンマ区切り）" style="width:100%;padding:8px 12px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:var(--font);outline:none;background:var(--bg);color:var(--text-primary)">
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button id="propCancel" style="font-family:var(--font);padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:none;color:var(--text-secondary);cursor:pointer;font-size:13px">キャンセル</button>
+      <button id="propConfirm" style="font-family:var(--font);padding:6px 16px;border:none;border-radius:6px;background:var(--accent-warm);color:#fff;cursor:pointer;font-size:13px;font-weight:600">追加</button>
+    </div>`;
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  dialog.querySelector('#propType').onchange = function() {
+    dialog.querySelector('#propOptionsWrap').style.display = this.value === 'select' ? '' : 'none';
+  };
+  dialog.querySelector('#propCancel').onclick = () => overlay.remove();
+  dialog.querySelector('#propConfirm').onclick = () => {
+    const name = dialog.querySelector('#propName').value.trim();
+    if (!name) return;
+    const type = dialog.querySelector('#propType').value;
+    const key = name.toLowerCase().replace(/[^a-z0-9]/g, '_') + '_' + Date.now().toString(36).slice(-4);
+    const prop = { key, label: name, type };
+    if (type === 'select') {
+      prop.options = dialog.querySelector('#propOptions').value.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    schema.push(prop);
+    p.property_schema = schema;
+    savePageToDb();
+    renderPageEditor();
+    overlay.remove();
+  };
+  setTimeout(() => dialog.querySelector('#propName').focus(), 100);
+}
+
+function removePageProperty(key) {
+  const p = getActivePage(); if (!p) return;
+  if (!confirm('このプロパティを削除しますか？')) return;
+  p.property_schema = (p.property_schema || []).filter(s => s.key !== key);
+  savePageToDb();
+  renderPageEditor();
+}
+
+async function updateSubpageProp(pageId, key, value) {
+  const pg = pages.find(p => p.id === pageId);
+  if (!pg) return;
+  if (!pg.properties) pg.properties = {};
+  pg.properties[key] = value;
+  await supabase.from('pages').update({
+    properties: pg.properties, updated_at: new Date().toISOString()
+  }).eq('id', pageId);
 }
 
 function pageExecCmd(cmd, val) {
@@ -1740,7 +1901,127 @@ function renderPageEditor() {
 
   const contentHtml = plainToHtml(p.content);
 
+  // パンくず
+  const crumbs = getPageBreadcrumbs(p.id);
+  let breadcrumbHtml = '';
+  if (crumbs.length > 1) {
+    breadcrumbHtml = `<div class="page-breadcrumbs">${crumbs.map((c,i) =>
+      i < crumbs.length - 1
+        ? `<span class="page-bc-item" onclick="selectPage('${c.id}')">${c.icon||'📄'} ${c.title||'無題'}</span><span class="page-bc-sep">/</span>`
+        : `<span class="page-bc-current">${c.icon||'📄'} ${c.title||'無題'}</span>`
+    ).join('')}</div>`;
+  }
+
+  // サブページ (DB機能)
+  const children = pages.filter(c => c.parent_id === p.id).sort((a,b) => new Date(b.updated_at) - new Date(a.updated_at));
+  const vt = p.view_type || 'gallery';
+  const schema = p.property_schema || [];
+  let subpagesHtml = '';
+  // ビュー切替タブ
+  const viewTabs = `<div class="subpages-header">
+    <div class="db-view-tabs">
+      <button class="db-view-tab${vt==='gallery'?' active':''}" onclick="setPageViewType('gallery')" title="ギャラリー">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      </button>
+      <button class="db-view-tab${vt==='table'?' active':''}" onclick="setPageViewType('table')" title="テーブル">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      </button>
+      <button class="db-view-tab${vt==='list'?' active':''}" onclick="setPageViewType('list')" title="リスト">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+      </button>
+    </div>
+    <span class="subpages-count">${children.length}</span>
+    <button class="db-add-prop-btn" onclick="addPageProperty()" title="プロパティを追加">+ プロパティ</button>
+    <button class="db-new-btn" onclick="createSubpage('${p.id}')">+ 新規</button>
+  </div>`;
+
+  let viewHtml = '';
+  if (vt === 'gallery') {
+    viewHtml = `<div class="subpages-grid">
+      ${children.map(c => {
+        const preview = (c.content||'').replace(/<[^>]*>/g,'').slice(0,60);
+        const props = c.properties || {};
+        let propsHtml = schema.slice(0,2).map(s => {
+          const v = props[s.key]; if (!v) return '';
+          if (s.type === 'select') return `<span class="db-prop-tag">${v}</span>`;
+          if (s.type === 'checkbox') return v === true ? `<span class="db-prop-check">✓ ${s.label}</span>` : '';
+          return `<span class="db-prop-text">${s.label}: ${v}</span>`;
+        }).filter(Boolean).join('');
+        return `<div class="subpage-card" onclick="selectPage('${c.id}')">
+          <div class="subpage-card-icon">${c.icon||'📄'}</div>
+          <div class="subpage-card-title">${c.title||'無題'}</div>
+          ${propsHtml ? `<div class="subpage-card-props">${propsHtml}</div>` : ''}
+          <div class="subpage-card-preview">${preview||'空のページ'}</div>
+          <div class="subpage-card-date">${new Date(c.updated_at).toLocaleDateString('ja-JP')}</div>
+        </div>`;
+      }).join('')}
+      <div class="subpage-card subpage-card-new" onclick="createSubpage('${p.id}')">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>新しいサブページ</span>
+      </div>
+    </div>`;
+  } else if (vt === 'table') {
+    viewHtml = `<div class="db-table-wrap"><table class="db-table">
+      <thead><tr>
+        <th class="db-th-title">タイトル</th>
+        ${schema.map(s => `<th>${s.label}<button class="db-th-del" onclick="removePageProperty('${s.key}')" title="削除">×</button></th>`).join('')}
+        <th class="db-th-date">更新日</th>
+      </tr></thead>
+      <tbody>
+        ${children.map(c => {
+          const props = c.properties || {};
+          return `<tr class="db-row" onclick="selectPage('${c.id}')">
+            <td class="db-td-title"><span class="db-td-icon">${c.icon||'📄'}</span> ${c.title||'無題'}</td>
+            ${schema.map(s => {
+              const v = props[s.key] ?? '';
+              if (s.type === 'select') {
+                return `<td><select class="db-cell-select" onclick="event.stopPropagation()" onchange="updateSubpageProp('${c.id}','${s.key}',this.value)">
+                  <option value="">—</option>${(s.options||[]).map(o=>`<option${v===o?' selected':''}>${o}</option>`).join('')}
+                </select></td>`;
+              }
+              if (s.type === 'checkbox') {
+                return `<td class="db-td-center"><input type="checkbox" ${v?'checked':''} onclick="event.stopPropagation();updateSubpageProp('${c.id}','${s.key}',this.checked)"></td>`;
+              }
+              if (s.type === 'date') {
+                return `<td><input type="date" class="db-cell-date" value="${v}" onclick="event.stopPropagation()" onchange="updateSubpageProp('${c.id}','${s.key}',this.value)"></td>`;
+              }
+              return `<td><input class="db-cell-text" value="${v}" placeholder="—" onclick="event.stopPropagation()" onchange="updateSubpageProp('${c.id}','${s.key}',this.value)"></td>`;
+            }).join('')}
+            <td class="db-td-date">${new Date(c.updated_at).toLocaleDateString('ja-JP')}</td>
+          </tr>`;
+        }).join('')}
+        <tr class="db-row-new" onclick="createSubpage('${p.id}')">
+          <td colspan="${schema.length+2}" class="db-td-new">+ 新規ページ</td>
+        </tr>
+      </tbody>
+    </table></div>`;
+  } else { // list
+    viewHtml = `<div class="db-list">
+      ${children.map(c => {
+        const props = c.properties || {};
+        let propsHtml = schema.map(s => {
+          const v = props[s.key]; if (!v) return '';
+          if (s.type === 'select') return `<span class="db-prop-tag">${v}</span>`;
+          if (s.type === 'checkbox') return v === true ? `<span class="db-prop-check">✓</span>` : '';
+          return `<span class="db-prop-text">${v}</span>`;
+        }).filter(Boolean).join('');
+        return `<div class="db-list-item" onclick="selectPage('${c.id}')">
+          <span class="db-list-icon">${c.icon||'📄'}</span>
+          <span class="db-list-title">${c.title||'無題'}</span>
+          <span class="db-list-props">${propsHtml}</span>
+          <span class="db-list-date">${new Date(c.updated_at).toLocaleDateString('ja-JP')}</span>
+        </div>`;
+      }).join('')}
+      <div class="db-list-item db-list-new" onclick="createSubpage('${p.id}')">
+        <span class="db-list-icon">+</span>
+        <span class="db-list-title" style="color:var(--text-tertiary)">新しいページ</span>
+      </div>
+    </div>`;
+  }
+  subpagesHtml = `<div class="subpages-section">${viewTabs}${viewHtml}</div>`;
+
   pe.innerHTML = `
+    ${breadcrumbHtml}
     <div class="page-header-row">
       <button class="page-icon-btn" onclick="cyclePageIcon()">${p.icon || '📄'}</button>
       <input class="project-name-input" value="${p.title || ''}" placeholder="無題"
@@ -1758,34 +2039,39 @@ function renderPageEditor() {
           onchange="changePageGroup(this.value)">${groupOpts}</select>
       </div>
     </div>
-    <div class="page-toolbar">
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h1')" title="見出し1">H1</button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h2')" title="見出し2">H2</button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h3')" title="見出し3">H3</button>
-      <span class="toolbar-sep"></span>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('bold')" title="太字 (⌘B)"><strong>B</strong></button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('italic')" title="斜体 (⌘I)"><em>I</em></button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('strikeThrough')" title="取り消し線"><del>S</del></button>
-      <span class="toolbar-sep"></span>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('insertUnorderedList')" title="箇条書き">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
-      </button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('insertOrderedList')" title="番号リスト">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="2" y="8" font-size="8" fill="currentColor" stroke="none">1</text><text x="2" y="14" font-size="8" fill="currentColor" stroke="none">2</text><text x="2" y="20" font-size="8" fill="currentColor" stroke="none">3</text></svg>
-      </button>
-      <span class="toolbar-sep"></span>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('formatBlock','blockquote')" title="引用">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V21z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3z"/></svg>
-      </button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageInsertLink()" title="リンク">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      </button>
-      <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('p')" title="段落に戻す">¶</button>
+    <div class="page-toolbar-wrap" id="pageToolbarWrap">
+      <div class="page-toolbar">
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h1')" title="見出し1">H1</button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h2')" title="見出し2">H2</button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('h3')" title="見出し3">H3</button>
+        <span class="toolbar-sep"></span>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('bold')" title="太字 (⌘B)"><strong>B</strong></button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('italic')" title="斜体 (⌘I)"><em>I</em></button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('strikeThrough')" title="取り消し線"><del>S</del></button>
+        <span class="toolbar-sep"></span>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('insertUnorderedList')" title="箇条書き">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
+        </button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('insertOrderedList')" title="番号リスト">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="2" y="8" font-size="8" fill="currentColor" stroke="none">1</text><text x="2" y="14" font-size="8" fill="currentColor" stroke="none">2</text><text x="2" y="20" font-size="8" fill="currentColor" stroke="none">3</text></svg>
+        </button>
+        <span class="toolbar-sep"></span>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageExecCmd('formatBlock','blockquote')" title="引用">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V21z"/><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2h.75c0 2.25.25 4-2.75 4v3z"/></svg>
+        </button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageInsertLink()" title="リンク">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+        </button>
+        <button type="button" onmousedown="event.preventDefault()" onclick="pageSetBlock('p')" title="段落に戻す">¶</button>
+      </div>
     </div>
     <div class="page-wysiwyg" contenteditable="true"
       oninput="onPageContentInput()"
+      onfocus="document.getElementById('pageToolbarWrap').classList.add('visible')"
+      onblur="setTimeout(()=>{if(!document.querySelector('.page-toolbar:hover'))document.getElementById('pageToolbarWrap').classList.remove('visible')},150)"
       data-placeholder="ここに自由に書く...">${contentHtml}</div>
-    <div class="report-footer">
+    ${subpagesHtml}
+    <div class="page-footer">
       <button class="btn-delete-report" onclick="deletePage('${p.id}')">このメモを削除</button>
       <span class="report-meta">${p.created_by} · ${new Date(p.created_at).toLocaleString('ja-JP')}</span>
     </div>`;
@@ -1946,7 +2232,6 @@ function closeTaskMenuOutside(e) {
 function showBulkPanel() {
   const el = document.getElementById('bulkPanel');
   if (el.innerHTML) { el.innerHTML = ''; return; }
-  document.getElementById('aiPanel').innerHTML = '';
   el.innerHTML = `
     <div class="bulk-panel">
       <div class="bulk-panel-title">テキストから一括追加</div>
@@ -2046,118 +2331,6 @@ function stopVoice() {
   renderProjectEditor();
 }
 
-// AI panel (placeholder - needs API key)
-let aiApiKey = localStorage.getItem('dezainaz_ai_key') || 'AIzaSyCcTBX2cuFUqZX6aWtQQzpwvQxRCxFP8R4';
-
-function showAiPanel() {
-  const el = document.getElementById('aiPanel');
-  if (el.innerHTML) { el.innerHTML = ''; return; }
-  document.getElementById('bulkPanel').innerHTML = '';
-  const p = getActiveProject();
-  if (!aiApiKey) {
-    el.innerHTML = `
-      <div class="ai-panel">
-        <div class="ai-panel-title">AI タスク生成</div>
-        <div class="ai-panel-desc">Gemini APIキーを設定してください</div>
-        <input class="settings-input" id="aiKeyInput" type="password" placeholder="Gemini API Key...">
-        <div class="bulk-actions">
-          <button class="btn-sm" onclick="document.getElementById('aiPanel').innerHTML=''">キャンセル</button>
-          <button class="btn-primary-sm" onclick="saveAiKey()">保存</button>
-        </div>
-      </div>`;
-    return;
-  }
-  el.innerHTML = `
-    <div class="ai-panel">
-      <div class="ai-panel-title">AI タスク生成</div>
-      <div class="ai-panel-desc">プロジェクト「${p ? p.name : ''}」の内容からタスクを自動提案します</div>
-      <textarea class="bulk-textarea" id="aiPrompt" placeholder="どんなタスクが必要ですか？例：LPのデザインと実装に必要なタスク"></textarea>
-      <div class="bulk-actions">
-        <button class="btn-sm" onclick="document.getElementById('aiPanel').innerHTML=''">キャンセル</button>
-        <button class="btn-primary-sm" id="aiGenBtn" onclick="generateAiTasks()">生成</button>
-      </div>
-      <div id="aiResults"></div>
-    </div>`;
-}
-
-function saveAiKey() {
-  const key = document.getElementById('aiKeyInput').value.trim();
-  if (!key) return;
-  aiApiKey = key;
-  localStorage.setItem('dezainaz_ai_key', key);
-  showAiPanel();
-}
-
-async function generateAiTasks() {
-  const prompt = document.getElementById('aiPrompt').value.trim();
-  if (!prompt) return;
-  const p = getActiveProject();
-  const btn = document.getElementById('aiGenBtn');
-  btn.textContent = '生成中...'; btn.disabled = true;
-  try {
-    const existingTasks = projectTasks.map(t => t.title).join(', ');
-    const systemPrompt = `あなたはプロジェクト管理のアシスタントです。以下のプロジェクトに必要な大まかなタスクを提案してください。
-プロジェクト名: ${p ? p.name : ''}
-既存タスク: ${existingTasks || 'なし'}
-ユーザーの要望: ${prompt}
-
-重要なルール:
-- 細かすぎず、大きな単位でタスクを提案すること（例: 「ボタンの色を変更」ではなく「UIデザイン」）
-- 3〜8個程度に絞ること
-- 既存タスクと重複しないこと
-- JSONの配列形式で {"title": "タスク名"} として返すこと
-- JSON配列のみを返し、他のテキストは含めないこと`;
-
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${aiApiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: systemPrompt }] }]
-      })
-    });
-    const data = await resp.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) throw new Error('AIの応答を解析できません');
-    const suggestions = JSON.parse(jsonMatch[0]);
-    const results = document.getElementById('aiResults');
-    results.innerHTML = `
-      <div style="margin-top:12px">
-        <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:8px">提案されたタスク（チェックして追加）</div>
-        ${suggestions.map((s, i) => `
-          <div class="ai-suggestion-item">
-            <input type="checkbox" checked id="aiSug${i}" value="${s.title}">
-            <label for="aiSug${i}">${s.title}</label>
-          </div>`).join('')}
-        <div class="bulk-actions" style="margin-top:8px">
-          <button class="btn-primary-sm" onclick="addAiSuggestions(${suggestions.length})">選択したタスクを追加</button>
-        </div>
-      </div>`;
-  } catch (e) {
-    console.error('AI error:', e);
-    document.getElementById('aiResults').innerHTML = `<div style="color:var(--red);font-size:12px;margin-top:8px">エラー: ${e.message}</div>`;
-  }
-  btn.textContent = '生成'; btn.disabled = false;
-}
-
-async function addAiSuggestions(count) {
-  const p = getActiveProject(); if (!p) return;
-  const tasks = [];
-  for (let i = 0; i < count; i++) {
-    const cb = document.getElementById('aiSug' + i);
-    if (cb && cb.checked) tasks.push(cb.value);
-  }
-  for (let i = 0; i < tasks.length; i++) {
-    const { data } = await supabase.from('project_tasks')
-      .insert({ project_id: p.id, title: tasks[i], sort_order: projectTasks.length + i }).select().single();
-    if (data) projectTasks.push(data);
-  }
-  p._taskCount = projectTasks.length;
-  p._doneCount = projectTasks.filter(t => t.status === 'done').length;
-  document.getElementById('aiPanel').innerHTML = '';
-  renderProjectEditor();
-}
-
 function updateProjectField(field, value) {
   const p = getActiveProject(); if (!p) return;
   const prevStatus = p.status;
@@ -2170,8 +2343,10 @@ function updateProjectField(field, value) {
 
 async function addProjectTask() {
   const p = getActiveProject(); if (!p) return;
+  const insertData = {project_id:p.id, title:'', sort_order:projectTasks.length};
+  if (p.default_assignee) insertData.assignee = p.default_assignee;
   const { data, error } = await supabase.from('project_tasks')
-    .insert({project_id:p.id, title:'', sort_order:projectTasks.length}).select().single();
+    .insert(insertData).select().single();
   if (error) { console.error('Add task error:',error); return; }
   projectTasks.push(data);
   p._taskCount=projectTasks.length;
@@ -2191,11 +2366,12 @@ function changeTaskStatus(idx, newStatus) {
   const sl={todo:'未着手',in_progress:'進行中',done:'完了'};
   const pName = p ? p.name : '';
   showToast(`「${projectTasks[idx].title}」→ ${sl[newStatus]}`);
-  sendNotification('task_status_changed', `🔄 [${pName}] 「${projectTasks[idx].title}」${sl[prevStatus]} → ${sl[projectTasks[idx].status]}`);
+  const assigneeLabel = projectTasks[idx].assignee ? `（担当: ${projectTasks[idx].assignee}）` : '（未担当）';
+  sendNotification('task_status_changed', `🔄 [${pName}] 「${projectTasks[idx].title}」${sl[prevStatus]} → ${sl[projectTasks[idx].status]}${assigneeLabel}`);
   if (projectTasks[idx].status === 'done') {
     projectTasks[idx].completed_by = currentUser;
     projectTasks[idx].completed_at = new Date().toISOString();
-    sendNotification('task_completed', `🎉 [${pName}] 「${projectTasks[idx].title}」が完了しました`);
+    sendNotification('task_completed', `🎉 [${pName}] 「${projectTasks[idx].title}」が完了しました${assigneeLabel}`);
   } else {
     projectTasks[idx].completed_by = null;
     projectTasks[idx].completed_at = null;
@@ -2260,313 +2436,17 @@ Object.assign(window, {
   addNotifSetting, updateNotifSetting, toggleNotifSetting,
   deleteNotifSetting, toggleGlobalTrigger,
   showWebhookHelp, toggleTaskMenu, closeTaskMenu, aiReflectDones,
-  toggleAiChat, sendAiChat, handleAiImageSelect, handleAiImagePaste, clearAiImage,
   inviteProjectMember, removeProjectMember,
   addMilestone, updateMilestone, toggleMilestone, deleteMilestone, editMilestone,
   addProjectPage, openProjectPage, unlinkProjectPage, linkExistingPage,
-  loadPages, createNewPage, selectPage, deletePage, togglePageGroup, createPageGroup, renamePageGroup, changePageGroup,
+  loadPages, createNewPage, selectPage, deletePage, togglePageGroup, createPageGroup, renamePageGroup, changePageGroup, togglePageTree, createSubpage,
+  setPageViewType, addPageProperty, removePageProperty, updateSubpageProp,
   updatePageField, cyclePageIcon,
   pageExecCmd, pageInsertLink, pageSetBlock, onPageContentInput,
   showBulkPanel, addBulkTasks, handleFileUpload,
   toggleVoiceInput, stopVoice,
-  showAiPanel, saveAiKey, generateAiTasks, addAiSuggestions,
   setWlUser, wlPrev, wlNext, toggleWorklog
 });
-
-// ========== AI Chat Bot ==========
-let aiChatHistory = [];
-let aiPendingImage = null; // { base64, mimeType, name }
-
-function handleAiImageSelect(input) {
-  const file = input.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    const base64 = reader.result.split(',')[1];
-    aiPendingImage = { base64, mimeType: file.type, name: file.name };
-    showAiImagePreview(file.name, URL.createObjectURL(file));
-  };
-  reader.readAsDataURL(file);
-  input.value = '';
-}
-
-function handleAiImagePaste(event) {
-  const items = event.clipboardData?.items;
-  if (!items) return;
-  for (const item of items) {
-    if (item.type.startsWith('image/')) {
-      event.preventDefault();
-      const file = item.getAsFile();
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = reader.result.split(',')[1];
-        aiPendingImage = { base64, mimeType: file.type, name: 'pasted-image.png' };
-        showAiImagePreview('ペースト画像', URL.createObjectURL(file));
-      };
-      reader.readAsDataURL(file);
-      break;
-    }
-  }
-}
-
-function showAiImagePreview(name, url) {
-  const el = document.getElementById('aiImagePreview');
-  if (!el) return;
-  el.style.display = 'flex';
-  el.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-secondary);border-radius:var(--radius);font-size:12px;color:var(--text-secondary)">
-    <img src="${url}" style="width:32px;height:32px;object-fit:cover;border-radius:4px">
-    <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${name}</span>
-    <button onclick="clearAiImage()" style="border:none;background:none;color:var(--text-tertiary);cursor:pointer;font-size:16px;padding:0 2px">&times;</button>
-  </div>`;
-}
-
-function clearAiImage() {
-  aiPendingImage = null;
-  const el = document.getElementById('aiImagePreview');
-  if (el) { el.style.display = 'none'; el.innerHTML = ''; }
-}
-
-function toggleAiChat() {
-  const panel = document.getElementById('aiChatPanel');
-  const fab = document.querySelector('.ai-fab');
-  panel.classList.toggle('open');
-  if (panel.classList.contains('open')) {
-    document.getElementById('aiChatInput').focus();
-    if (fab) fab.style.display = 'none';
-  } else {
-    if (fab) fab.style.display = '';
-  }
-}
-
-async function sendAiChat() {
-  const input = document.getElementById('aiChatInput');
-  const msg = input.value.trim();
-  if (!msg && !aiPendingImage) return;
-  input.value = '';
-
-  // Show user message
-  const displayMsg = aiPendingImage ? `📎 ${aiPendingImage.name}\n${msg}` : msg;
-  appendChatMsg('user', displayMsg);
-  appendChatMsg('typing', '考え中...');
-
-  const btn = document.getElementById('aiChatSendBtn');
-  btn.disabled = true;
-
-  // 画像パーツを構築
-  const userParts = [];
-  if (aiPendingImage) {
-    userParts.push({ inline_data: { mime_type: aiPendingImage.mimeType, data: aiPendingImage.base64 } });
-  }
-  userParts.push({ text: msg || 'この画像について教えてください' });
-  const sentImage = aiPendingImage;
-  clearAiImage();
-
-  try {
-    // Build context
-    const ctx = await buildAiContext();
-    aiChatHistory.push({ role: 'user', parts: userParts });
-
-    const systemPrompt = `あなたはDezainaz社内ツールのAIアシスタントです。ユーザーの指示に従い、データを操作してください。
-
-現在のコンテキスト:
-${ctx}
-
-利用可能なアクション（JSON配列で返してください）:
-- {"action":"add_task","project_id":"...","title":"...","assignee":"..."} — タスク追加
-- {"action":"update_task","task_id":"...","fields":{"title":"...","status":"todo|in_progress|done","assignee":"...","description":"..."}} — タスク更新
-- {"action":"delete_task","task_id":"..."} — タスク削除
-- {"action":"add_project","name":"...","description":"..."} — プロジェクト追加
-- {"action":"update_project","project_id":"...","fields":{"name":"...","status":"active|on_hold|completed|cancelled","priority":"low|medium|high","description":"..."}} — プロジェクト更新
-- {"action":"delete_project","project_id":"..."} — プロジェクト削除
-- {"action":"add_report","date":"YYYY-MM-DD","username":"..."} — 日報作成
-- {"action":"update_report","report_id":"...","fields":{"start_time":"HH:MM","end_time":"HH:MM","notes":"...","todos":[{"text":"...","done":false}],"dones":[{"text":"...","done":true}]}} — 日報更新
-- {"action":"add_member","name":"..."} — メンバー追加
-- {"action":"add_page","title":"...","content":"...","icon":"📄"} — メモページ作成
-- {"action":"update_page","page_id":"...","fields":{"title":"...","content":"...","icon":"..."}} — メモページ更新
-- {"action":"reply","message":"..."} — テキスト返信のみ
-
-必ず以下のJSON形式で返してください:
-{"reply":"ユーザーへの返答テキスト","actions":[...アクション配列（不要なら空配列）]}
-
-アクションが不要な質問の場合はreplyのみでactionsは空配列にしてください。
-削除は確認してからにしてください（replyで確認を求め、ユーザーが同意したらアクションを実行）。`;
-
-    const contents = [
-      { role: 'user', parts: [{ text: systemPrompt }] },
-      { role: 'model', parts: [{ text: '{"reply":"了解しました。何でも指示してください。","actions":[]}' }] },
-      ...aiChatHistory
-    ];
-
-    const resp = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${aiApiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents })
-    });
-    const data = await resp.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    // Parse response
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('応答を解析できません');
-    const parsed = JSON.parse(jsonMatch[0]);
-
-    removeChatTyping();
-
-    // Execute actions
-    if (parsed.actions && parsed.actions.length > 0) {
-      for (const act of parsed.actions) {
-        await executeAiAction(act);
-      }
-      const actionSummary = parsed.actions.map(a => `✓ ${a.action}`).join('\n');
-      appendChatMsg('bot', parsed.reply + '\n\n' + actionSummary);
-    } else {
-      appendChatMsg('bot', parsed.reply);
-    }
-
-    aiChatHistory.push({ role: 'model', parts: [{ text }] });
-
-    // Refresh views immediately
-    await loadTeamMembers();
-    if (currentView === 'report') {
-      await loadReports();
-      if (activeId) renderEditor();
-    } else if (currentView === 'project') {
-      await loadProjects();
-      if (activeProjectId) {
-        await loadProjectTasks(activeProjectId);
-      }
-    } else if (currentView === 'pages') {
-      await loadPages();
-      if (activePageId) renderPageEditor();
-    }
-    // Also check if actions affected the other view
-    const hasProjectAction = parsed.actions.some(a => ['add_task','update_task','delete_task','add_project','update_project','delete_project'].includes(a.action));
-    const hasReportAction = parsed.actions.some(a => ['add_report','update_report'].includes(a.action));
-    if (hasProjectAction && currentView !== 'project') {
-      // Pre-load so it's fresh when switching
-      const { data: pData } = await supabase.from('projects').select('*').order('created_at',{ascending:false});
-      projects = pData || [];
-    }
-    if (hasReportAction && currentView !== 'report') {
-      const { data: rData } = await supabase.from('daily_reports').select('*').eq('username',currentUser).order('date',{ascending:false});
-      reports = (rData||[]).map(mapRow);
-    }
-
-  } catch (e) {
-    console.error('AI Chat error:', e);
-    removeChatTyping();
-    appendChatMsg('bot', 'エラーが発生しました: ' + e.message);
-  }
-  btn.disabled = false;
-}
-
-async function buildAiContext() {
-  const parts = [];
-  parts.push(`現在のユーザー: ${currentUser}`);
-  parts.push(`現在のビュー: ${currentView}`);
-  parts.push(`チームメンバー: ${teamMembers.map(m=>m.name).join(', ')}`);
-  parts.push(`今日: ${todayStr()}`);
-
-  // Projects
-  const { data: allProjects } = await supabase.from('projects').select('id,name,status,priority,description,start_date,due_date').order('created_at',{ascending:false});
-  if (allProjects && allProjects.length) {
-    parts.push(`\nプロジェクト一覧:`);
-    for (const p of allProjects) {
-      const { data: tasks } = await supabase.from('project_tasks').select('id,title,status,assignee,description').eq('project_id',p.id).order('sort_order');
-      const sl = {active:'進行中',on_hold:'保留',completed:'完了',cancelled:'中止'};
-      parts.push(`- [${p.id}] ${p.name} (${sl[p.status]}, 優先度:${p.priority})`);
-      if (tasks) {
-        const tsl = {todo:'未着手',in_progress:'進行中',done:'完了'};
-        tasks.forEach(t => {
-          parts.push(`  - [${t.id}] ${t.title} (${tsl[t.status]}, 担当:${t.assignee||'未割当'}${t.description?', メモ:'+t.description.slice(0,30):''})`);
-        });
-      }
-    }
-  }
-
-  // Recent reports
-  const { data: recentReports } = await supabase.from('daily_reports').select('id,date,username,start_time,end_time,notes').order('date',{ascending:false}).limit(5);
-  if (recentReports && recentReports.length) {
-    parts.push(`\n最近の日報:`);
-    recentReports.forEach(r => {
-      parts.push(`- [${r.id}] ${r.date} ${r.username} (${r.start_time||'未開始'}〜${r.end_time||'未終了'})`);
-    });
-  }
-
-  return parts.join('\n');
-}
-
-async function executeAiAction(act) {
-  switch (act.action) {
-    case 'add_task': {
-      const { data } = await supabase.from('project_tasks')
-        .insert({ project_id: act.project_id, title: act.title, assignee: act.assignee || null, sort_order: 999 })
-        .select().single();
-      break;
-    }
-    case 'update_task': {
-      if (act.fields) {
-        await supabase.from('project_tasks').update({ ...act.fields, updated_at: new Date().toISOString() }).eq('id', act.task_id);
-      }
-      break;
-    }
-    case 'delete_task': {
-      await supabase.from('project_tasks').delete().eq('id', act.task_id);
-      break;
-    }
-    case 'add_project': {
-      await supabase.from('projects').insert({ name: act.name, description: act.description || '', created_by: currentUser }).select().single();
-      break;
-    }
-    case 'update_project': {
-      if (act.fields) {
-        await supabase.from('projects').update({ ...act.fields, updated_at: new Date().toISOString() }).eq('id', act.project_id);
-      }
-      break;
-    }
-    case 'delete_project': {
-      await supabase.from('projects').delete().eq('id', act.project_id);
-      break;
-    }
-    case 'add_report': {
-      await supabase.from('daily_reports').insert({ date: act.date, username: act.username || currentUser }).select().single();
-      break;
-    }
-    case 'update_report': {
-      if (act.fields) {
-        await supabase.from('daily_reports').update(act.fields).eq('id', act.report_id);
-      }
-      break;
-    }
-    case 'add_member': {
-      await supabase.from('team_members').insert({ name: act.name }).select().single();
-      break;
-    }
-    case 'add_page': {
-      await supabase.from('pages').insert({ title: act.title || '', content: act.content || '', icon: act.icon || '📄', created_by: currentUser }).select().single();
-      break;
-    }
-    case 'update_page': {
-      if (act.fields) await supabase.from('pages').update({ ...act.fields, updated_at: new Date().toISOString() }).eq('id', act.page_id);
-      break;
-    }
-  }
-}
-
-function appendChatMsg(type, text) {
-  const el = document.getElementById('aiChatMessages');
-  const div = document.createElement('div');
-  div.className = 'ai-msg ' + type;
-  div.textContent = text;
-  el.appendChild(div);
-  el.scrollTop = el.scrollHeight;
-}
-
-function removeChatTyping() {
-  const el = document.getElementById('aiChatMessages');
-  const typing = el.querySelector('.ai-msg.typing');
-  if (typing) typing.remove();
-}
 
 // ========== Realtime ==========
 // リアルタイム同期のデバウンス（自分の保存直後は無視）

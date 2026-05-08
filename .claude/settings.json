@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "WebFetch",
+      "Agent",
+      "Bash(cmd:git *)",
+      "Bash(cmd:ls *)",
+      "Bash(cmd:npm *)",
+      "Bash(cmd:npx *)",
+      "Bash(cmd:gh *)"
+    ],
+    "deny": [
+      "Bash(cmd:rm -rf /)",
+      "Bash(cmd:git push --force *)",
+      "Bash(cmd:git reset --hard *)"
+    ]
+  }
+}
